@@ -55,3 +55,32 @@ export interface PaycheckConfig {
   dayOfMonth: number | null;
   amount: number | null;
 }
+
+/** Section definition from PocketBase – which sections to show and in what order. */
+export type SectionType = "bills_list" | "spanish_fork" | "auto_transfers";
+export type BillListAccount = "bills_account" | "checking_account";
+export type BillListType = "bills" | "subscriptions";
+
+export interface Section {
+  id: string;
+  sortOrder: number;
+  type: SectionType;
+  title: string;
+  subtitle?: string | null;
+  /** For type=bills_list: which account. */
+  account?: BillListAccount | null;
+  /** For type=bills_list: bills vs subscriptions. */
+  listType?: BillListType | null;
+}
+
+/** One row from an uploaded statement CSV (stored in PocketBase `statements` collection). */
+export interface StatementRecord {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  balance?: number | null;
+  category?: string | null;
+  account?: string | null;
+  sourceFile?: string | null;
+}
