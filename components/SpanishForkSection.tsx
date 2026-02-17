@@ -3,16 +3,18 @@ import type { SpanishForkBill } from "@/lib/types";
 
 interface SpanishForkSectionProps {
   bills: SpanishForkBill[];
+  title?: string;
+  subtitle?: string;
 }
 
-export function SpanishForkSection({ bills }: SpanishForkSectionProps) {
+export function SpanishForkSection({ bills, title = "Spanish Fork (Rental)", subtitle = "Bills with tenant paid amounts" }: SpanishForkSectionProps) {
   return (
     <section className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 shadow-sm">
       <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-200">
-        Spanish Fork (Rental)
+        {title}
       </h2>
       <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-        Bills with tenant paid amounts
+        {subtitle}
       </p>
       <div className="mt-3 overflow-x-auto -mx-4 px-4">
         <table className="w-full min-w-[280px] text-sm">
