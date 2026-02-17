@@ -8,6 +8,7 @@ export interface BillOrSub {
   inThisPaycheck: boolean;
   amount: number;
   autoTransferNote?: string;
+  subsection?: string | null;
 }
 
 export interface AutoTransfer {
@@ -83,4 +84,25 @@ export interface StatementRecord {
   category?: string | null;
   account?: string | null;
   sourceFile?: string | null;
+}
+
+/** Learned rule for tagging statement rows into sections/types. */
+export type StatementTagTargetType =
+  | "bill"
+  | "subscription"
+  | "spanish_fork"
+  | "auto_transfer"
+  | "ignore";
+
+export interface StatementTagRule {
+  id: string;
+  /** Match key for description, e.g. first few words uppercased. */
+  pattern: string;
+  /** Optional normalized description / grouped name. */
+  normalizedDescription: string | null;
+  targetType: StatementTagTargetType;
+  /** Which section on the main page (Bills/Checking/Spanish Fork), if applicable. */
+  targetSection: BillListAccount | "spanish_fork" | null;
+  /** Name to use on the main page (bill/auto-transfer name). */
+  targetName: string | null;
 }

@@ -1,6 +1,10 @@
+"use client";
+
 import { formatCurrency } from "@/lib/format";
 import { formatDateShort, daysUntil } from "@/lib/paycheckDates";
 import type { NextPaycheckInfo } from "@/lib/paycheckConfig";
+import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
+import { useTheme } from "./ThemeProvider";
 
 interface NextPaychecksCardProps {
   today: Date;
@@ -8,9 +12,11 @@ interface NextPaychecksCardProps {
 }
 
 export function NextPaychecksCard({ today, paychecks }: NextPaychecksCardProps) {
+  const { theme } = useTheme();
+
   return (
-    <section className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 shadow-sm">
-      <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-3">
+    <section className={getCardClasses(theme.paychecks)}>
+      <h2 className={getSectionLabelClasses(theme.paychecks)}>
         Next paychecks
       </h2>
       <div className="flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-400 mb-4">

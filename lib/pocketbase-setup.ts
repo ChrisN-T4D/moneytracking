@@ -295,6 +295,50 @@ export async function createCollections(
     if (c) created.push(col.name);
   }
 
+  // user_preferences: relation to users + theme (JSON), auth rules so user can only access own record
+  const userPrefsCreated = await createUserPreferencesCollection(baseUrl, token);
+  if (userPrefsCreated) created.push("user_preferences");
+
+  return created;
+}
+
+/** Get the id of the built-in users collection. */
+async function getUsersCollectionId(baseUrl: string, token: string): Promise<string | null> {
+  const url = `${baseUrl.replace(/\/$/, "")}/api/collections`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { items?: Array<{ id: string; name: string }> };
+  const users = data.items?.find((c) => c.name === "users");
+  return users?.id ?? null;
+}
+
+/** Create user_preferences collection (user relation + theme JSON). Requires users collection to exist. */
+async function createUserPreferencesCollection(
+  baseUrl: string,
+  token: string
+): Promise<boolean> {
+  const usersId = await getUsersCollectionId(baseUrl, token);
+  if (!usersId) return false;
+
+  const authRule = "user = @request.auth.id";
+  const payload = {
+    ...baseRules,
+    name: "user_preferences",
+    listRule: authRule,
+    viewRule: authRule,
+    createRule: authRule,
+    updateRule: authRule,
+    deleteRule: authRule,
+    fields: [
+      { name: "user", type: "relation", required: true, options: { collectionId: usersId, maxSelect: 1, cascadeDelete: true } },
+      { name: "theme", type: "json", required: false },
+    ],
+  };
+
+  const { created } = await createCollection(baseUrl, token, payload);
   return created;
 }
 

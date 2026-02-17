@@ -9,6 +9,8 @@ import type {
   SpanishForkBill,
   Summary,
   StatementRecord,
+  StatementTagRule,
+  StatementTagTargetType,
 } from "./types";
 import type { Frequency } from "./types";
 
@@ -128,6 +130,7 @@ interface PbBill {
   autoTransferNote?: string | null;
   account?: string;
   listType?: string;
+  subsection?: string | null;
 }
 
 function parseFrequency(s: string | undefined): Frequency {
@@ -144,11 +147,12 @@ function parseBill(item: PbBill): BillOrSub {
     inThisPaycheck: Boolean(item.inThisPaycheck),
     amount: Number(item.amount) || 0,
     autoTransferNote: item.autoTransferNote ?? undefined,
+    subsection: item.subsection ?? null,
   };
 }
 
 // Store account/listType on parsed items for filtering (PocketBase fields preserved in extended type)
-export type BillOrSubWithMeta = BillOrSub & { account?: string; listType?: string };
+export type BillOrSubWithMeta = BillOrSub & { account?: string; listType?: string; subsection?: string | null };
 
 /** Fetch all bills/subscriptions from PocketBase (with account/listType for section filtering). */
 export async function getBillsWithMeta(): Promise<BillOrSubWithMeta[]> {
@@ -163,6 +167,7 @@ export async function getBillsWithMeta(): Promise<BillOrSubWithMeta[]> {
         ...b,
         account: item.account,
         listType: item.listType,
+        subsection: item.subsection ?? b.subsection ?? null,
       } as BillOrSubWithMeta;
     });
   } catch {
@@ -322,6 +327,38 @@ export async function getStatements(options?: {
       category: item.category ?? null,
       account: item.account ?? null,
       sourceFile: item.sourceFile ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// --- Statement tag rules (for tagging wizard) ---
+
+interface PbStatementTagRule {
+  id: string;
+  pattern?: string;
+  normalizedDescription?: string;
+  targetType?: string;
+  targetSection?: string | null;
+  targetName?: string;
+}
+
+/** Fetch statement tagging rules from PocketBase. Returns [] if URL not set or request fails. */
+export async function getStatementTagRules(): Promise<StatementTagRule[]> {
+  if (!POCKETBASE_URL) return [];
+  try {
+    const data = await pbFetch<PbListResponse<PbStatementTagRule>>(
+      "/api/collections/statement_tag_rules/records?perPage=200"
+    );
+    return (data.items ?? []).map((item) => ({
+      id: item.id,
+      pattern: item.pattern ?? "",
+      normalizedDescription: item.normalizedDescription ?? null,
+      targetType: (item.targetType as StatementTagTargetType) ?? "ignore",
+      targetSection:
+        (item.targetSection as BillListAccount | "spanish_fork" | null) ?? null,
+      targetName: item.targetName ?? null,
     }));
   } catch {
     return [];

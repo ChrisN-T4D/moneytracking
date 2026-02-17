@@ -1,15 +1,21 @@
+"use client";
+
 import { formatCurrency } from "@/lib/format";
 import type { Summary } from "@/lib/types";
+import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
+import { useTheme } from "./ThemeProvider";
 
 interface SummaryCardProps {
   summary: Summary;
 }
 
 export function SummaryCard({ summary }: SummaryCardProps) {
+  const { theme } = useTheme();
+
   return (
-    <section className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 shadow-sm">
+    <section className={getCardClasses(theme.summary)}>
       <div>
-        <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-3">
+        <h2 className={getSectionLabelClasses(theme.summary)}>
           Amount needed
         </h2>
         <div className="space-y-2 text-sm">

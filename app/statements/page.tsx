@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import type { StatementTagTargetType } from "@/lib/types";
 
 interface SuggestedPaycheck {
   name: string;
@@ -33,6 +34,18 @@ interface SuggestedBill {
   suggestedGroup?: { section: "bills_account" | "checking_account" | "spanish_fork"; listType: "bills" | "subscriptions" };
 }
 
+interface TagSuggestion {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  suggestion: {
+    targetType: StatementTagTargetType;
+    targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
+    targetName: string; // In PocketBase: name = subsection, so this IS the subsection
+  };
+}
+
 export default function StatementsPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -54,6 +67,25 @@ export default function StatementsPage() {
   const [billOptionsByIndex, setBillOptionsByIndex] = useState<
     Record<number, { section: "bills_account" | "checking_account" | "spanish_fork"; listType: "bills" | "subscriptions"; frequency: string }>
   >({});
+  const [tagSuggestions, setTagSuggestions] = useState<TagSuggestion[]>([]);
+  const [tagEdits, setTagEdits] = useState<
+    Record<
+      string,
+      {
+        targetType: StatementTagTargetType;
+        targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
+        targetName: string; // In PocketBase: name = subsection
+      }
+    >
+  >({});
+  const [tagStatus, setTagStatus] = useState<"idle" | "loading" | "saving" | "success" | "error">("idle");
+  const [tagMessage, setTagMessage] = useState("");
+  const [subsections, setSubsections] = useState<{ bills: string[]; subscriptions: string[] }>({
+    bills: [],
+    subscriptions: [],
+  });
+  const [billNames, setBillNames] = useState<Record<string, string[]>>({});
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const groupKeyFrom = (section: string, listType: string) =>
     section === "spanish_fork" ? "spanish_fork" : `${section}_${listType}`;
@@ -79,6 +111,18 @@ export default function StatementsPage() {
     spanish_fork: "Spanish Fork (Rental)",
   };
   const [applying, setApplying] = useState(false);
+
+  function groupKeyFromTypeAndSection(
+    targetType: StatementTagTargetType,
+    section: "bills_account" | "checking_account" | "spanish_fork" | null
+  ): BillGroupKey {
+    if (section === "spanish_fork") return "spanish_fork";
+    if (section === "bills_account") {
+      return targetType === "subscription" ? "bills_account_subscriptions" : "bills_account_bills";
+    }
+    // default to checking account
+    return targetType === "subscription" ? "checking_account_subscriptions" : "checking_account_bills";
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -173,6 +217,108 @@ export default function StatementsPage() {
     } catch (err) {
       setFillStatus("error");
       setFillMessage(err instanceof Error ? err.message : "Analyze failed.");
+    }
+  }
+
+  async function loadTagSuggestions() {
+    console.log("[Tagging wizard] Button clicked! Starting load...");
+    setTagStatus("loading");
+    setTagMessage("Loading...");
+    try {
+      console.log("[Tagging wizard] Fetching /api/statement-tags...");
+      const res = await fetch("/api/statement-tags");
+      console.log("[Tagging wizard] Response status:", res.status, res.ok);
+      const data = (await res.json()) as { ok?: boolean; items?: TagSuggestion[]; message?: string };
+      console.log("[Tagging wizard] Response data:", { ok: data.ok, itemsCount: data.items?.length ?? 0, message: data.message });
+      if (!res.ok || data.ok === false) {
+        setTagStatus("error");
+        const msg = data.message ?? `Tagging wizard load failed (${res.status}).`;
+        setTagMessage(msg);
+        console.error("[Tagging wizard] Error:", msg, data);
+        return;
+      }
+      const items = data.items ?? [];
+      const subsectionsData = (data.subsections as { bills?: string[]; subscriptions?: string[] }) ?? {
+        bills: [],
+        subscriptions: [],
+      };
+      const billNamesData = (data.billNames as Record<string, string[]>) ?? {};
+      setSubsections({
+        bills: subsectionsData.bills ?? [],
+        subscriptions: subsectionsData.subscriptions ?? [],
+      });
+      setBillNames(billNamesData);
+      console.log("[Tagging wizard] Subsections loaded:", {
+        bills: subsectionsData.bills ?? [],
+        subscriptions: subsectionsData.subscriptions ?? [],
+      });
+      console.log("[Tagging wizard] Bill names by group:", billNamesData);
+      console.log("[Tagging wizard] Items received:", items.length);
+      console.log("[Tagging wizard] Subsections:", subsectionsData);
+      if (items.length === 0) {
+        setTagStatus("success");
+        setTagMessage(data.message ?? "No statement rows found. Import some statements first.");
+        return;
+      }
+      setTagSuggestions(items);
+      const nextEdits: typeof tagEdits = {};
+      items.forEach((t) => {
+        nextEdits[t.id] = {
+          targetType: t.suggestion.targetType,
+          targetSection: t.suggestion.targetSection,
+          targetName: t.suggestion.targetName, // This IS the subsection/name
+        };
+      });
+      setTagEdits(nextEdits);
+      setTagStatus("success");
+      setTagMessage(`Loaded ${items.length} statement rows to tag.`);
+      console.log("[Tagging wizard] Successfully loaded", items.length, "rows");
+    } catch (err) {
+      setTagStatus("error");
+      const msg = err instanceof Error ? err.message : "Tagging wizard load failed.";
+      setTagMessage(msg);
+      console.error("[Tagging wizard] Exception:", err);
+    }
+  }
+
+  async function applyTagEdits() {
+    if (tagSuggestions.length === 0) {
+      setTagMessage("No statement rows to tag.");
+      return;
+    }
+    setTagStatus("saving");
+    setTagMessage("");
+    try {
+      const items = tagSuggestions.map((t) => {
+        const edit = tagEdits[t.id] ?? t.suggestion;
+        return {
+          statementId: t.id,
+          targetType: edit.targetType,
+          targetSection: edit.targetSection,
+          targetName: edit.targetName, // This IS the subsection/name in PocketBase
+        };
+      });
+      const res = await fetch("/api/statement-tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = (await res.json()) as { ok?: boolean; message?: string; rulesCreated?: number; billsUpserted?: number };
+      if (!res.ok || data.ok === false) {
+        setTagStatus("error");
+        setTagMessage(data.message ?? "Saving tags failed.");
+        console.error("Save tags error:", data);
+        return;
+      }
+      setTagStatus("success");
+      setTagMessage(data.message ?? `Saved ${data.rulesCreated ?? 0} rules and ${data.billsUpserted ?? 0} bills.`);
+      // Optionally clear suggestions so you only see remaining next time.
+      setTagSuggestions([]);
+      setTagEdits({});
+    } catch (err) {
+      setTagStatus("error");
+      setTagMessage(err instanceof Error ? err.message : "Saving tags failed.");
+      console.error("Save tags exception:", err);
     }
   }
 
@@ -293,7 +439,7 @@ export default function StatementsPage() {
           </p>
         </header>
 
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4">
+        <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 space-y-4">
           <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 mb-2">
             Wells Fargo PDF + CSV
           </p>
@@ -301,6 +447,198 @@ export default function StatementsPage() {
             <strong>PDF:</strong> Tailored for Wells Fargo combined-statement PDFs. We use the “Transaction history” section, M/D dates, and first amount per line (deposits positive, withdrawals negative). Description is the payee/merchant name where we can detect it.<br />
             <strong>CSV:</strong> First row = headers (Date, Description or Memo/Payee, Amount; optional Balance, Category; or Debit/Credit columns).
           </p>
+          <div className="mt-2 space-y-2">
+            <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+              Tagging wizard (teach the app how to classify statement rows)
+            </p>
+            {(tagStatus === "error" || tagMessage) && (
+              <p
+                className={`text-xs ${
+                  tagStatus === "error"
+                    ? "text-red-600 dark:text-red-400"
+                    : "text-neutral-600 dark:text-neutral-400"
+                }`}
+              >
+                {tagMessage}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                setWizardOpen(true);
+                loadTagSuggestions();
+              }}
+              className="rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-500 disabled:opacity-50"
+              disabled={tagStatus === "loading"}
+            >
+              {tagStatus === "loading" ? "Loading rows…" : "Open tagging wizard"}
+            </button>
+            {wizardOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-xl max-w-3xl w-[95vw] max-h-[80vh] flex flex-col">
+                  <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-700 px-4 py-3">
+                    <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                      Tag statement rows
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setWizardOpen(false)}
+                      className="rounded-lg p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      aria-label="Close"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="px-4 py-2 border-b border-neutral-100 dark:border-neutral-800">
+                    {(tagStatus === "error" || tagMessage) && (
+                      <p
+                        className={`text-xs ${
+                          tagStatus === "error"
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-neutral-600 dark:text-neutral-400"
+                        }`}
+                      >
+                        {tagMessage}
+                      </p>
+                    )}
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
+                      Rows are loaded from your <code className="px-1 rounded bg-neutral-200 dark:bg-neutral-700">statements</code> collection.
+                      Adjust type / section / bill name, then save.
+                    </p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                    {tagSuggestions.length === 0 && tagStatus !== "loading" && (
+                      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                        No rows loaded yet. Click &quot;Open tagging wizard&quot; again if needed.
+                      </p>
+                    )}
+                    {tagSuggestions.map((row) => {
+                      const edit = tagEdits[row.id] ?? row.suggestion;
+                      const type = edit.targetType;
+                      const sect = edit.targetSection;
+                      const currentListType =
+                        sect && sect !== "spanish_fork"
+                          ? type === "subscription"
+                            ? "subscriptions"
+                            : "bills"
+                          : null;
+                      return (
+                        <div
+                          key={row.id}
+                          className="flex flex-wrap items-start gap-2 p-1.5 rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900/50"
+                        >
+                          <div className="flex-shrink-0 text-[10px] text-neutral-500 dark:text-neutral-400 w-16">
+                            {row.date.slice(5)}
+                          </div>
+                          <div className="flex-1 min-w-[120px] text-[11px] text-neutral-800 dark:text-neutral-200 truncate">
+                            {row.description}
+                          </div>
+                          <div className="flex-shrink-0 text-[11px] font-medium text-right tabular-nums text-neutral-700 dark:text-neutral-300 w-16">
+                            {row.amount.toFixed(2)}
+                          </div>
+                          <div className="flex-shrink-0 flex items-center gap-1 flex-wrap">
+                            <select
+                              className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[80px]"
+                              value={type}
+                              onChange={(e) => {
+                                const nextType = e.target.value as StatementTagTargetType;
+                                setTagEdits((prev) => ({
+                                  ...prev,
+                                  [row.id]: {
+                                    ...edit,
+                                    targetType: nextType,
+                                  },
+                                }));
+                              }}
+                            >
+                              <option value="bill">Bill</option>
+                              <option value="subscription">Sub</option>
+                              <option value="spanish_fork">Spanish Fork</option>
+                              <option value="auto_transfer">Auto</option>
+                              <option value="ignore">Ignore</option>
+                            </select>
+                            {(type === "bill" || type === "subscription" || type === "spanish_fork") && (
+                              <>
+                                <select
+                                  className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[100px]"
+                                  value={sect ?? "checking_account"}
+                                  onChange={(e) => {
+                                    const nextSection = e.target.value as
+                                      | "bills_account"
+                                      | "checking_account"
+                                      | "spanish_fork";
+                                    setTagEdits((prev) => ({
+                                      ...prev,
+                                      [row.id]: {
+                                        ...edit,
+                                        targetSection: nextSection,
+                                      },
+                                    }));
+                                  }}
+                                >
+                                  <option value="bills_account">Bills Account</option>
+                                  <option value="checking_account">Checking</option>
+                                  <option value="spanish_fork">Spanish Fork</option>
+                                </select>
+                                <select
+                                  className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[140px] max-w-[200px]"
+                                  value={edit.targetName}
+                                  onChange={(e) =>
+                                    setTagEdits((prev) => ({
+                                      ...prev,
+                                      [row.id]: {
+                                        ...edit,
+                                        targetName: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                >
+                                  {(() => {
+                                    const fromBillNames = Array.from(
+                                      new Set(Object.values(billNames).flat() as string[])
+                                    );
+                                    const typeSubsections =
+                                      type === "subscription"
+                                        ? subsections.subscriptions
+                                        : subsections.bills;
+                                    const combined = Array.from(
+                                      new Set([...fromBillNames, ...typeSubsections])
+                                    );
+                                    const options =
+                                      combined.length > 0 ? combined : [edit.targetName];
+                                    return options.map((name) => (
+                                      <option key={name} value={name}>
+                                        {name}
+                                      </option>
+                                    ));
+                                  })()}
+                                </select>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="border-t border-neutral-200 dark:border-neutral-800 px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={applyTagEdits}
+                      className="w-full rounded-lg bg-emerald-600 text-white px-3 py-2 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50"
+                      disabled={tagStatus === "saving"}
+                    >
+                      {tagStatus === "saving"
+                        ? "Saving…"
+                        : `Save ${tagSuggestions.length} tags and update bills`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
