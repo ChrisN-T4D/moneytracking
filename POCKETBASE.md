@@ -151,6 +151,36 @@ Set **Create** rule so the app can POST new records when importing (e.g. allow c
 
 ---
 
+## User login and profile (theme preferences)
+
+The app supports **user login** via PocketBase’s built-in **users** collection. After login, the app stores an auth token in an httpOnly cookie and can load/save **user preferences** (e.g. section theme colors) in a **user_preferences** collection.
+
+### Users (PocketBase auth)
+
+PocketBase creates a **users** collection by default. Ensure it has at least **email** and **password** (and optionally **name**, **username**). In PocketBase admin: **Settings** → **Auth** to configure auth options. Users sign in with email (or username) + password.
+
+### 8. `user_preferences` (profile: theme)
+
+Created automatically by the **Setup** flow when you run “Create collections and seed data” with admin credentials. One record per user; stores theme preferences (section colors).
+
+| Field | Type   | Required | Notes |
+|-------|--------|----------|--------|
+| user  | Relation (single, to **users**) | yes | Links to the logged-in user |
+| theme | JSON   | no       | Object with keys like `summary`, `paychecks`, `bills`, `spanishFork`; values: `default`, `mint`, `sunset` |
+
+**API rules:** list, view, create, update, delete: `user = @request.auth.id` so each user only sees/edits their own preferences.
+
+If your host blocks the admin API, create **user_preferences** manually: one relation field **user** (single, to **users**), one **JSON** field **theme**, and set the rules above.
+
+### Auth API routes (Next.js)
+
+- **POST /api/auth/login** — body `{ "identity": "email@example.com", "password": "..." }`. Sets auth cookie and returns `{ user }`.
+- **POST /api/auth/logout** — clears auth cookie.
+- **GET /api/auth/me** — returns `{ user, theme }` if logged in (cookie auth).
+- **PATCH /api/profile** — body `{ "theme": { ... } }`. Updates or creates the current user’s `user_preferences` record.
+
+---
+
 ## Self-hosting: reverse proxy and admin API
 
 If you self-host PocketBase behind nginx, Caddy, or another reverse proxy, the app needs **both**:

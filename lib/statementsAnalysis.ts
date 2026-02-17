@@ -179,7 +179,7 @@ export function suggestAutoTransfersFromStatements(statements: StatementRecord[]
 }
 
 /** Normalize withdrawal description to a bill name for grouping. */
-function billNameFromDescription(description: string): string {
+export function billNameFromDescription(description: string): string {
   const s = description.trim();
   if (/\bFreedom\s*Mtg|Freedom\s*Mtg/i.test(s)) return "Freedom Mortgage";
   if (/\bState\s*Farm/i.test(s)) return "State Farm";

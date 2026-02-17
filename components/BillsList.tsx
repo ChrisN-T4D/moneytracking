@@ -1,5 +1,9 @@
+ "use client";
+
 import { formatCurrency } from "@/lib/format";
 import type { BillOrSub } from "@/lib/types";
+import { getCardClasses } from "@/lib/themePalettes";
+import { useTheme } from "./ThemeProvider";
 
 interface BillsListProps {
   title: string;
@@ -21,9 +25,11 @@ function frequencyLabel(f: BillOrSub["frequency"]) {
 }
 
 export function BillsList({ title, subtitle, items }: BillsListProps) {
+  const { theme } = useTheme();
+
   return (
-    <section className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 shadow-sm">
-      <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-200">{title}</h2>
+    <section className={getCardClasses(theme.bills)}>
+      <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">{title}</h2>
       {subtitle && (
         <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</p>
       )}

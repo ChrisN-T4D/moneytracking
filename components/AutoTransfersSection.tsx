@@ -1,5 +1,9 @@
+"use client";
+
 import { formatCurrency } from "@/lib/format";
 import type { AutoTransfer } from "@/lib/types";
+import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
+import { useTheme } from "./ThemeProvider";
 
 interface AutoTransfersSectionProps {
   transfers: AutoTransfer[];
@@ -8,9 +12,11 @@ interface AutoTransfersSectionProps {
 }
 
 export function AutoTransfersSection({ transfers, title = "Auto transfers", subtitle = "What for, frequency, account, date, amount" }: AutoTransfersSectionProps) {
+  const { theme } = useTheme();
+
   return (
-    <section className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 shadow-sm">
-      <h2 className="text-base font-semibold text-neutral-800 dark:text-neutral-200">
+    <section className={getCardClasses(theme.autoTransfers)}>
+      <h2 className={getSectionLabelClasses(theme.autoTransfers)}>
         {title}
       </h2>
       <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
