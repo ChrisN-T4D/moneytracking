@@ -85,38 +85,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme]);
 
-  const saveProfileTheme = useCallback((next: ThemeState) => {
-    if (!user) return;
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(async () => {
-      saveTimeoutRef.current = null;
-      try {
-        await fetch("/api/profile", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            theme: {
-              summary: next.summary,
-              paychecks: next.paychecks,
-              bills: next.bills,
-              spanishFork: next.spanishFork,
-              autoTransfers: next.autoTransfers,
-            },
-          }),
-          credentials: "include",
-        });
-      } catch {
-        // ignore
-      }
-    }, 500);
-  }, [user]);
-
-  useEffect(() => {
-    if (user) saveProfileTheme(theme);
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [user, theme, saveProfileTheme]);
+  // Removed auto-save - theme is now saved manually from profile page
+  // This prevents the 502 errors from auto-saving on every change
 
   const updateSection = useCallback((section: keyof ThemeState, palette: PaletteId) => {
     setTheme((prev) => ({ ...prev, [section]: palette }));

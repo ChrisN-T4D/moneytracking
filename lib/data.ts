@@ -1,4 +1,4 @@
-import type { Summary, BillOrSub, AutoTransfer, SpanishForkBill } from "./types";
+import type { Summary, BillOrSub, AutoTransfer, SpanishForkBill, MoneyGoal } from "./types";
 
 export const initialSummary: Summary = {
   monthlyTotal: 6324.16,
@@ -71,4 +71,23 @@ export const spanishForkBills: SpanishForkBill[] = [
   { id: "sf5", name: "Internet + Cable", frequency: "Monthly", nextDue: "Mar 26, 2026", inThisPaycheck: false, amount: 10, tenantPaid: null },
   { id: "sf6", name: "Advantage Management", frequency: "Monthly", nextDue: "Mar 15, 2026", inThisPaycheck: false, amount: 146.25, tenantPaid: null },
   { id: "sf7", name: "Embridge Gas", frequency: "Monthly", nextDue: "Mar 15, 2026", inThisPaycheck: false, amount: 35, tenantPaid: 35 },
+];
+
+export const goals: MoneyGoal[] = [
+  {
+    id: "g1",
+    name: "Emergency fund to $5,000",
+    targetAmount: 5000,
+    currentAmount: 2500,
+    targetDate: "2026-12-31",
+    category: "Savings",
+  },
+  {
+    id: "g2",
+    name: "Pay off credit card",
+    targetAmount: 3000,
+    currentAmount: 1200,
+    targetDate: "2026-08-01",
+    category: "Debt",
+  },
 ];

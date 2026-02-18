@@ -9,6 +9,7 @@ interface BillsListProps {
   title: string;
   subtitle?: string;
   items: BillOrSub[];
+  monthlySpending?: number;
 }
 
 function frequencyLabel(f: BillOrSub["frequency"]) {
@@ -24,15 +25,25 @@ function frequencyLabel(f: BillOrSub["frequency"]) {
   }
 }
 
-export function BillsList({ title, subtitle, items }: BillsListProps) {
+export function BillsList({ title, subtitle, items, monthlySpending }: BillsListProps) {
   const { theme } = useTheme();
 
   return (
     <section className={getCardClasses(theme.bills)}>
-      <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">{title}</h2>
-      {subtitle && (
-        <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</p>
-      )}
+      <div className="flex items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">{title}</h2>
+          {subtitle && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</p>
+          )}
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">This month</p>
+          <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300 tabular-nums">
+            {monthlySpending !== undefined && monthlySpending > 0 ? formatCurrency(monthlySpending) : "—"}
+          </p>
+        </div>
+      </div>
       <div className="mt-3 overflow-x-auto -mx-4 px-4">
         <table className="w-full min-w-[320px] text-sm">
           <thead>

@@ -13,6 +13,12 @@ export interface StatementTagSuggestion {
   targetType: StatementTagTargetType;
   targetSection: BillListAccount | "spanish_fork" | null;
   targetName: string; // In PocketBase: name = subsection, so this IS the subsection
+  /** Optional goal ID this statement contributes to (PocketBase `goals` collection). */
+  goalId?: string | null;
+  /** Confidence level of this suggestion. */
+  confidence?: "HIGH" | "MEDIUM" | "LOW";
+  /** How this suggestion was matched. */
+  matchType?: "exact_pattern" | "normalized_description" | "heuristic";
 }
 
 /** Simple pattern key based on description (first few words uppercased). */
@@ -20,22 +26,60 @@ export function makeStatementPattern(description: string): string {
   return description.trim().split(/\s+/).slice(0, 3).join(" ").toUpperCase();
 }
 
-function matchRule(
+export interface MatchResult {
+  rule: StatementTagRule;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  matchType: "exact_pattern" | "normalized_description" | "heuristic";
+}
+
+export function matchRule(
   rules: StatementTagRule[],
   statement: StatementRecord
-): StatementTagRule | null {
+): MatchResult | null {
   const pat = makeStatementPattern(statement.description);
   const norm = billNameFromDescription(statement.description);
 
-  return (
-    rules.find((r) => r.pattern.toUpperCase() === pat) ??
-    rules.find(
-      (r) =>
-        r.normalizedDescription &&
-        r.normalizedDescription.toLowerCase() === norm.toLowerCase()
-    ) ??
-    null
+  // Try exact pattern match first (HIGH confidence)
+  const exactMatch = rules.find((r) => r.pattern.toUpperCase() === pat);
+  if (exactMatch) {
+    const confidence = calculateConfidence(exactMatch);
+    return { rule: exactMatch, confidence, matchType: "exact_pattern" };
+  }
+
+  // Try normalized description match (MEDIUM confidence)
+  const normalizedMatch = rules.find(
+    (r) =>
+      r.normalizedDescription &&
+      r.normalizedDescription.toLowerCase() === norm.toLowerCase()
   );
+  if (normalizedMatch) {
+    const confidence = calculateConfidence(normalizedMatch);
+    return { rule: normalizedMatch, confidence, matchType: "normalized_description" };
+  }
+
+  return null;
+}
+
+/** Calculate confidence level based on rule usage statistics. */
+function calculateConfidence(rule: StatementTagRule): "HIGH" | "MEDIUM" | "LOW" {
+  const useCount = rule.useCount ?? 0;
+  const overrideCount = rule.overrideCount ?? 0;
+  const totalUses = useCount + overrideCount;
+
+  // If rule has been used successfully 3+ times with no overrides, HIGH confidence
+  if (useCount >= 3 && overrideCount === 0) return "HIGH";
+  
+  // If rule has been used successfully 5+ times with <20% override rate, HIGH confidence
+  if (useCount >= 5 && totalUses > 0 && overrideCount / totalUses < 0.2) return "HIGH";
+  
+  // If rule has been used 2+ times with no overrides, MEDIUM confidence
+  if (useCount >= 2 && overrideCount === 0) return "MEDIUM";
+  
+  // If rule has been used but has overrides, MEDIUM confidence (user can review)
+  if (useCount > 0 && overrideCount > 0 && overrideCount / totalUses < 0.5) return "MEDIUM";
+  
+  // New rule or high override rate, LOW confidence
+  return "LOW";
 }
 
 export function suggestTagsForStatements(
@@ -47,10 +91,13 @@ export function suggestTagsForStatements(
     if (matched) {
       return {
         statement: s,
-        targetType: matched.targetType,
-        targetSection: matched.targetSection,
+        targetType: matched.rule.targetType,
+        targetSection: matched.rule.targetSection,
         targetName:
-          matched.targetName ?? matched.normalizedDescription ?? billNameFromDescription(s.description),
+          matched.rule.targetName ?? matched.rule.normalizedDescription ?? billNameFromDescription(s.description),
+        goalId: matched.rule.goalId ?? null,
+        confidence: matched.confidence,
+        matchType: matched.matchType,
       };
     }
 
@@ -64,6 +111,8 @@ export function suggestTagsForStatements(
         targetType,
         targetSection: group.section,
         targetName: name,
+        confidence: "LOW",
+        matchType: "heuristic",
       };
     }
 
@@ -72,6 +121,8 @@ export function suggestTagsForStatements(
       targetType: "ignore",
       targetSection: null,
       targetName: billNameFromDescription(s.description),
+      confidence: "LOW",
+      matchType: "heuristic",
     };
   });
 }

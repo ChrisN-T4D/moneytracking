@@ -1,12 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useTheme } from "./ThemeProvider";
-import { PALETTE_IDS, PALETTE_LABELS, type PaletteId } from "@/lib/themePalettes";
+import { useRouter } from "next/navigation";
+import { AddItemsToBillsModal } from "@/components/AddItemsToBillsModal";
+import { AddPaychecksFromStatementsModal } from "@/components/AddPaychecksFromStatementsModal";
 
 export function HeaderPreferencesMenu() {
-  const { theme, updateSection } = useTheme();
   const [open, setOpen] = useState(false);
+  const [openPaychecksModal, setOpenPaychecksModal] = useState(false);
+  const [openBillsModal, setOpenBillsModal] = useState(false);
+  const router = useRouter();
 
   return (
     <div className="relative">
@@ -48,65 +51,59 @@ export function HeaderPreferencesMenu() {
             </button>
           </div>
 
-          <p className="mb-2 text-[11px] text-neutral-500 dark:text-neutral-400">
-            Customize accent colors for each section. Saved in this browser only.
-          </p>
-
-          <div className="space-y-2">
-            <PreferenceRow
-              label="Summary"
-              value={theme.summary}
-              onChange={(val) => updateSection("summary", val)}
-            />
-            <PreferenceRow
-              label="Paychecks"
-              value={theme.paychecks}
-              onChange={(val) => updateSection("paychecks", val)}
-            />
-            <PreferenceRow
-              label="Bills"
-              value={theme.bills}
-              onChange={(val) => updateSection("bills", val)}
-            />
-            <PreferenceRow
-              label="Spanish Fork"
-              value={theme.spanishFork}
-              onChange={(val) => updateSection("spanishFork", val)}
-            />
-            <PreferenceRow
-              label="Auto transfers"
-              value={theme.autoTransfers}
-              onChange={(val) => updateSection("autoTransfers", val)}
-            />
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-neutral-500 dark:text-neutral-500">
+              Shortcuts
+            </p>
+            <button
+              type="button"
+              className="block w-full rounded-lg px-2 py-1.5 text-left text-[11px] font-medium text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              onClick={() => {
+                setOpen(false);
+                router.push("/profile");
+              }}
+            >
+              Profile
+            </button>
+            <button
+              type="button"
+              className="block w-full rounded-lg px-2 py-1.5 text-left text-[11px] font-medium text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              onClick={() => {
+                setOpen(false);
+                router.push("/statements");
+              }}
+            >
+              Statements
+            </button>
+            <div className="pt-0.5 space-y-1.5">
+              <button
+                type="button"
+                className="w-full rounded-full bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-emerald-500"
+                onClick={() => {
+                  setOpen(false);
+                  setOpenPaychecksModal(true);
+                }}
+              >
+                Add paychecks from statements
+              </button>
+              <button
+                type="button"
+                className="w-full rounded-full bg-sky-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-sky-500"
+                onClick={() => {
+                  setOpen(false);
+                  setOpenBillsModal(true);
+                }}
+              >
+                Add items to bills
+              </button>
+            </div>
           </div>
         </div>
       )}
+
+      <AddPaychecksFromStatementsModal open={openPaychecksModal} onClose={() => setOpenPaychecksModal(false)} />
+      <AddItemsToBillsModal open={openBillsModal} onClose={() => setOpenBillsModal(false)} />
     </div>
-  );
-}
-
-interface PreferenceRowProps {
-  label: string;
-  value: PaletteId;
-  onChange: (val: PaletteId) => void;
-}
-
-function PreferenceRow({ label, value, onChange }: PreferenceRowProps) {
-  return (
-    <label className="flex items-center justify-between gap-2">
-      <span className="text-[11px] text-neutral-600 dark:text-neutral-300">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as PaletteId)}
-        className="flex-1 rounded-lg border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-700 shadow-sm dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
-      >
-        {PALETTE_IDS.map((id) => (
-          <option key={id} value={id}>
-            {PALETTE_LABELS[id]}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 

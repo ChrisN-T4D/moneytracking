@@ -1,79 +1,74 @@
-/**
- * Next paycheck date for biweekly (every 2 weeks).
- * anchorDate: any past or future pay date in the series.
- */
+/** Parse a YYYY-MM-DD string (or ISO string — only the date part is used) to local midnight. */
+export function parseLocalDateString(dateStr: string): Date {
+  const datePart = dateStr.includes("T") ? dateStr.split("T")[0]! : dateStr;
+  const [y, m, d] = datePart.split("-").map(Number);
+  if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return new Date(dateStr);
+  return new Date(y, m - 1, d);
+}
+
+/** Convert a Date or YYYY-MM-DD string to a local calendar midnight Date. */
+function toLocalDay(d: Date | string): Date {
+  if (typeof d === "string") return parseLocalDateString(d);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Next Thursday on or after `date` (returns same day when already Thursday). */
+export function getNextThursdayOnOrAfter(date: Date | string): Date {
+  const d = toLocalDay(date);
+  const day = d.getDay(); // 0=Sun … 6=Sat
+  d.setDate(d.getDate() + (day <= 4 ? 4 - day : 11 - day));
+  return d;
+}
+
+/** Next pay date in a biweekly (every-other-Thursday) series on or after `referenceDate`. */
 export function getNextPaycheckBiweekly(
-  anchorDate: Date,
-  fromDate: Date = new Date()
+  anchorDate: Date | string,
+  referenceDate: Date | string = new Date()
 ): Date {
-  const anchor = new Date(anchorDate);
-  const from = new Date(fromDate);
-  anchor.setHours(0, 0, 0, 0);
-  from.setHours(0, 0, 0, 0);
-  const next = new Date(anchor);
-  while (next < from) {
-    next.setDate(next.getDate() + 14);
-  }
-  return next;
+  const from = toLocalDay(referenceDate);
+  const next = getNextThursdayOnOrAfter(anchorDate);
+  while (next < from) next.setDate(next.getDate() + 14);
+  return toLocalDay(next);
 }
 
-function getDaysInMonth(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+function lastWorkingDayOfMonth(year: number, month: number): Date {
+  const last = new Date(year, month + 1, 0);
+  if (last.getDay() === 0) last.setDate(last.getDate() - 2);
+  else if (last.getDay() === 6) last.setDate(last.getDate() - 1);
+  return last;
 }
 
-/**
- * Last weekday (Mon–Fri) of the given month.
- */
-function getLastWorkingDayOfMonth(year: number, month: number): Date {
-  const lastDay = new Date(year, month + 1, 0);
-  const d = lastDay.getDay();
-  if (d === 0) lastDay.setDate(lastDay.getDate() - 2);
-  else if (d === 6) lastDay.setDate(lastDay.getDate() - 1);
-  return lastDay;
-}
-
-/**
- * Next paycheck date for "last working day of month".
- */
+/** Next "last working day of month" pay date on or after `referenceDate`. */
 export function getNextPaycheckLastWorkingDayOfMonth(
-  fromDate: Date = new Date()
+  referenceDate: Date | string = new Date()
 ): Date {
-  const from = new Date(fromDate);
-  from.setHours(0, 0, 0, 0);
-  const thisMonth = getLastWorkingDayOfMonth(from.getFullYear(), from.getMonth());
+  const from = toLocalDay(referenceDate);
+  const thisMonth = lastWorkingDayOfMonth(from.getFullYear(), from.getMonth());
   if (thisMonth >= from) return thisMonth;
-  return getLastWorkingDayOfMonth(from.getFullYear(), from.getMonth() + 1);
+  return lastWorkingDayOfMonth(from.getFullYear(), from.getMonth() + 1);
 }
 
-/**
- * Next paycheck date for monthly (same day each month).
- * dayOfMonth: 1–31; if month has fewer days, uses last day (e.g. 30 → Feb 28).
- */
+/** Next monthly (fixed day-of-month) pay date on or after `referenceDate`. */
 export function getNextPaycheckMonthly(
   dayOfMonth: number,
-  fromDate: Date = new Date()
+  referenceDate: Date | string = new Date()
 ): Date {
-  const from = new Date(fromDate);
-  from.setHours(0, 0, 0, 0);
-  const thisMonth = new Date(from.getFullYear(), from.getMonth(), Math.min(dayOfMonth, getDaysInMonth(from)));
+  const from = toLocalDay(referenceDate);
+  const clampToMonth = (y: number, mo: number) =>
+    Math.min(dayOfMonth, new Date(y, mo + 1, 0).getDate());
+  const thisMonth = new Date(from.getFullYear(), from.getMonth(), clampToMonth(from.getFullYear(), from.getMonth()));
   if (thisMonth >= from) return thisMonth;
-  const nextMonth = new Date(from.getFullYear(), from.getMonth() + 1, 1);
-  const day = Math.min(dayOfMonth, getDaysInMonth(nextMonth));
-  return new Date(nextMonth.getFullYear(), nextMonth.getMonth(), day);
+  const y = from.getFullYear();
+  const mo = from.getMonth() + 1;
+  return new Date(y, mo, clampToMonth(y, mo));
 }
 
+/** Format a local calendar date as "Mon D, YYYY". */
 export function formatDateShort(d: Date): string {
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return toLocalDay(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Whole calendar days from `from` to `to` (negative when `to` is in the past). */
 export function daysUntil(from: Date, to: Date): number {
-  const a = new Date(from);
-  const b = new Date(to);
-  a.setHours(0, 0, 0, 0);
-  b.setHours(0, 0, 0, 0);
-  return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.round((toLocalDay(to).getTime() - toLocalDay(from).getTime()) / 86_400_000);
 }

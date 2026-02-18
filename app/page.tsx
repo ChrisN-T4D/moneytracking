@@ -1,14 +1,12 @@
-import Link from "next/link";
 import { SummaryCard } from "@/components/SummaryCard";
 import { NextPaychecksCard } from "@/components/NextPaychecksCard";
 import { BillsList } from "@/components/BillsList";
 import { SpanishForkSection } from "@/components/SpanishForkSection";
 import { AutoTransfersSection } from "@/components/AutoTransfersSection";
-import { AddItemsToBillsModal } from "@/components/AddItemsToBillsModal";
-import { AuthProvider } from "@/components/AuthProvider";
-import { ThemeProvider } from "@/components/ThemeProvider";
+import { GoalsSection } from "@/components/GoalsSection";
 import { HeaderPreferencesMenu } from "@/components/HeaderPreferencesMenu";
 import { HeaderAuth } from "@/components/HeaderAuth";
+import { AuthenticatedContent } from "@/components/AuthenticatedContent";
 import {
   initialSummary,
   billsAccountBills,
@@ -17,6 +15,7 @@ import {
   checkingAccountSubs,
   autoTransfers,
   spanishForkBills,
+  goals as staticGoals,
 } from "@/lib/data";
 import {
   getPaychecks,
@@ -28,10 +27,13 @@ import {
   getSummary,
   getStatements,
   getStatementTagRules,
+  getGoals,
 } from "@/lib/pocketbase";
-import { getNextPaychecks } from "@/lib/paycheckConfig";
 import type { BillListAccount, BillListType } from "@/lib/types";
 import { computeLastMonthActuals } from "@/lib/statementTagging";
+import { getPaycheckDepositsThisMonth } from "@/lib/statementsAnalysis";
+
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const today = new Date();
@@ -46,6 +48,7 @@ export default async function Home() {
     summaryPb,
     statements,
     tagRules,
+    goalsPb,
   ] =
     hasPb
       ? await Promise.all([
@@ -57,6 +60,7 @@ export default async function Home() {
           getSummary(),
           getStatements({ perPage: 1000, sort: "-date" }),
           getStatementTagRules(),
+          getGoals(),
         ])
       : [
           await getPaychecks(),
@@ -67,9 +71,9 @@ export default async function Home() {
           null,
           [],
           [],
+          [],
         ];
 
-  const nextPaychecks = getNextPaychecks(paycheckConfigs, today);
   const usePb = hasPb && sections.length > 0;
   const summary = usePb && summaryPb ? summaryPb : initialSummary;
   const { monthName, rows: lastMonthActuals } =
@@ -77,10 +81,116 @@ export default async function Home() {
       ? computeLastMonthActuals(statements, tagRules, today)
       : { monthName: "", rows: [] };
 
+  // Compute additional goal progress from statements tagged with a goalId.
+  const goalProgressById = new Map<string, number>();
+  for (const s of statements) {
+    const gid = s.goalId;
+    if (!gid) continue;
+    const prev = goalProgressById.get(gid) ?? 0;
+    // Treat any movement toward a goal as positive progress.
+    const contribution = Math.abs(s.amount);
+    goalProgressById.set(gid, prev + contribution);
+  }
+
+  const baseGoals = hasPb && goalsPb.length > 0 ? goalsPb : staticGoals;
+  const goals = baseGoals.map((g) => ({
+    ...g,
+    currentAmount: (g.currentAmount ?? 0) + (goalProgressById.get(g.id) ?? 0),
+  }));
+
+  // Calculate monthly spending per section
+  const monthlySpendingBySection = new Map<string, number>();
+  for (const row of lastMonthActuals) {
+    const key = `${row.section}|${row.listType ?? "bills"}`;
+    const current = monthlySpendingBySection.get(key) ?? 0;
+    monthlySpendingBySection.set(key, current + row.actualAmount);
+  }
+
+  // Paycheck deposits this month (for "Paid this month" in paychecks section):
+  // (1) from imported statements that look like paychecks, (2) from paychecks added via modal with paidThisMonthYearMonth set
+  const currentYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const fromStatements =
+    hasPb && statements.length > 0 ? getPaycheckDepositsThisMonth(statements, today) : 0;
+  const fromAddedPaychecks =
+    hasPb && paycheckConfigs.length > 0
+      ? paycheckConfigs
+          .filter((p) => p.paidThisMonthYearMonth === currentYearMonth && (p.amountPaidThisMonth ?? 0) > 0)
+          .reduce((sum, p) => sum + (p.amountPaidThisMonth ?? 0), 0)
+      : 0;
+  const paycheckPaidThisMonth = fromStatements + fromAddedPaychecks;
+
   return (
-    <AuthProvider>
-      <ThemeProvider>
-      <main className="min-h-screen pb-safe bg-neutral-100 dark:bg-neutral-900">
+    <AuthenticatedContent>
+      <MainContent
+          hasPb={hasPb}
+          today={today}
+          summary={summary}
+          goals={goals}
+          usePb={usePb}
+          sections={sections}
+          billsWithMeta={billsWithMeta}
+          spanishForkPb={spanishForkPb}
+          autoTransfersPb={autoTransfersPb}
+          billsAccountBills={billsAccountBills}
+          billsAccountSubs={billsAccountSubs}
+          checkingAccountBills={checkingAccountBills}
+          checkingAccountSubs={checkingAccountSubs}
+          spanishForkBills={spanishForkBills}
+          autoTransfers={autoTransfers}
+          lastMonthActuals={lastMonthActuals}
+          monthName={monthName}
+          monthlySpendingBySection={monthlySpendingBySection}
+          paycheckPaidThisMonth={paycheckPaidThisMonth}
+          paycheckConfigs={paycheckConfigs}
+        />
+      </AuthenticatedContent>
+  );
+}
+
+function MainContent({
+  hasPb,
+  today,
+  summary,
+  goals,
+  usePb,
+  sections,
+  billsWithMeta,
+  spanishForkPb,
+  autoTransfersPb,
+  billsAccountBills,
+  billsAccountSubs,
+  checkingAccountBills,
+  checkingAccountSubs,
+  spanishForkBills,
+  autoTransfers,
+  lastMonthActuals,
+  monthName,
+  monthlySpendingBySection,
+  paycheckPaidThisMonth,
+  paycheckConfigs,
+}: {
+  hasPb: boolean;
+  today: Date;
+  summary: any;
+  goals: any;
+  usePb: boolean;
+  sections: any;
+  billsWithMeta: any;
+  spanishForkPb: any;
+  autoTransfersPb: any;
+  billsAccountBills: any;
+  billsAccountSubs: any;
+  checkingAccountBills: any;
+  checkingAccountSubs: any;
+  spanishForkBills: any;
+  autoTransfers: any;
+  lastMonthActuals: any;
+  monthName: string;
+  paycheckPaidThisMonth?: number;
+  paycheckConfigs: Awaited<ReturnType<typeof getPaychecks>>;
+}) {
+  return (
+    <main className="min-h-screen pb-safe bg-neutral-100 dark:bg-neutral-900">
       {/* Header - sticky on mobile */}
       <header className="sticky top-0 z-10 bg-neutral-100/95 dark:bg-neutral-900/95 backdrop-blur supports-[backdrop-filter]:bg-neutral-100/80 dark:supports-[backdrop-filter]:bg-neutral-900/80 border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 safe-area-inset-top">
         <div className="flex items-baseline justify-between gap-2">
@@ -89,17 +199,10 @@ export default async function Home() {
               Neu Money Tracking
             </h1>
             <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-0.5">
-              Bills, paychecks, and leftovers
+              Take a breath. Let&apos;s look at the numbers together.
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {hasPb && <AddItemsToBillsModal />}
-            <Link
-              href="/statements"
-              className="text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 whitespace-nowrap"
-            >
-              Statements
-            </Link>
             {hasPb && <HeaderAuth />}
             <HeaderPreferencesMenu />
           </div>
@@ -108,10 +211,17 @@ export default async function Home() {
 
       <div className="p-4 space-y-6 max-w-2xl mx-auto">
         {/* Next paychecks: today vs each person's next pay date */}
-        <NextPaychecksCard today={today} paychecks={nextPaychecks} />
+        <NextPaychecksCard
+          today={today}
+          paycheckPaidThisMonth={paycheckPaidThisMonth}
+          paycheckConfigs={paycheckConfigs}
+        />
 
         {/* Summary - most important on mobile */}
         <SummaryCard summary={summary} />
+
+        {/* Current money goals */}
+        <GoalsSection goals={goals} />
 
         {/* Sections: from PocketBase when available, else static */}
         {usePb ? (
@@ -122,12 +232,15 @@ export default async function Home() {
                 section.account as BillListAccount,
                 section.listType as BillListType
               );
+              const sectionKey = `${section.account}|${section.listType}`;
+              const monthlySpending = monthlySpendingBySection.get(sectionKey) ?? 0;
               return (
                 <BillsList
                   key={section.id}
                   title={section.title}
                   subtitle={section.subtitle ?? undefined}
                   items={items}
+                  monthlySpending={monthlySpending}
                 />
               );
             }
@@ -159,19 +272,23 @@ export default async function Home() {
               title="Bills (Bills Account)"
               subtitle="Oklahoma bills"
               items={billsAccountBills}
+              monthlySpending={monthlySpendingBySection.get("bills_account|bills") ?? 0}
             />
             <BillsList
               title="Subscriptions (Bills Account)"
               items={billsAccountSubs}
+              monthlySpending={monthlySpendingBySection.get("bills_account|subscriptions") ?? 0}
             />
             <BillsList
               title="Bills (Checking Account)"
               subtitle="Checking bills"
               items={checkingAccountBills}
+              monthlySpending={monthlySpendingBySection.get("checking_account|bills") ?? 0}
             />
             <BillsList
               title="Subscriptions (Checking Account)"
               items={checkingAccountSubs}
+              monthlySpending={monthlySpendingBySection.get("checking_account|subscriptions") ?? 0}
             />
             <SpanishForkSection bills={spanishForkBills} />
             <AutoTransfersSection transfers={autoTransfers} />
@@ -227,7 +344,5 @@ export default async function Home() {
         )}
       </div>
     </main>
-      </ThemeProvider>
-    </AuthProvider>
   );
 }

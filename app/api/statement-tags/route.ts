@@ -4,6 +4,7 @@ import {
   getStatementTagRules,
   getBillsWithMeta,
   getSpanishForkBills,
+  getGoals,
 } from "@/lib/pocketbase";
 import { getAdminToken } from "@/lib/pocketbase-setup";
 import type {
@@ -12,7 +13,7 @@ import type {
   BillListAccount,
   BillListType,
 } from "@/lib/types";
-import { suggestTagsForStatements, makeStatementPattern } from "@/lib/statementTagging";
+import { suggestTagsForStatements, makeStatementPattern, matchRule } from "@/lib/statementTagging";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
 
@@ -119,11 +120,12 @@ export async function GET() {
     );
   }
   try {
-    const [statements, rules, bills, spanishForkBills] = await Promise.all([
+    const [statements, rules, bills, spanishForkBills, goals] = await Promise.all([
       getStatementsForTagging(),
       getStatementTagRules(),
       getBillsForTagging(),
       getSpanishForkBills(),
+      getGoals(),
     ]);
 
     // In PocketBase: name = subsection, so extract unique names (subsections) grouped by listType
@@ -214,8 +216,11 @@ export async function GET() {
       });
     }
 
-    // For now, just use the most recent statements (already sorted desc by date).
-    const suggestions = suggestTagsForStatements(statements, rules);
+    // Filter to only untagged statements (no goalId set) - these need manual review
+    const untaggedStatements = statements.filter((s) => !s.goalId);
+    
+    // Generate suggestions for untagged statements (already includes confidence)
+    const suggestions = suggestTagsForStatements(untaggedStatements, rules);
 
     // In PocketBase: name = subsection, so targetName IS the subsection
     const payload = suggestions.map((s) => ({
@@ -227,6 +232,11 @@ export async function GET() {
         targetType: s.targetType,
         targetSection: s.targetSection,
         targetName: s.targetName, // This is the subsection/name
+        goalId: s.goalId ?? null,
+        confidence: s.confidence ?? "LOW",
+        matchType: s.matchType ?? "heuristic",
+        // Only auto-tag HIGH confidence exact pattern matches
+        hasMatchedRule: s.confidence === "HIGH" && s.matchType === "exact_pattern",
       },
     }));
 
@@ -236,6 +246,7 @@ export async function GET() {
       items: payload,
       subsections: subsectionsByType,
       billNames: billNamesByGroup,
+      goals: goals.map((g) => ({ id: g.id, name: g.name })),
     });
   } catch (e) {
     console.error("GET /api/statement-tags error:", e);
@@ -252,6 +263,15 @@ interface IncomingTagItem {
   targetType: StatementTagTargetType;
   targetSection?: BillListAccount | "spanish_fork" | null;
   targetName?: string; // In PocketBase: name = subsection, so this IS the subsection
+  goalId?: string | null;
+  /** If this tag was auto-suggested and user changed it, mark as override. */
+  wasAutoTagged?: boolean;
+  /** Original suggestion if user overrode it. */
+  originalSuggestion?: {
+    targetType?: StatementTagTargetType;
+    targetSection?: BillListAccount | "spanish_fork" | null;
+    targetName?: string;
+  };
 }
 
 export async function POST(request: Request) {
@@ -288,11 +308,25 @@ export async function POST(request: Request) {
       const pattern = (item.pattern && item.pattern.trim()) || makeStatementPattern(stmt.description);
       const targetType = item.targetType;
       const targetSection = item.targetSection ?? null;
+      const goalId = item.goalId && item.goalId.trim() ? item.goalId.trim() : null;
       // In PocketBase: name = subsection, so targetName is the subsection/name
       const targetName =
         (item.targetName && item.targetName.trim()) ||
         stmt.description.slice(0, 40) ||
         "Item";
+
+      // Save goalId to statement record
+      if (goalId) {
+        try {
+          await fetch(`${base}/api/collections/statements/records/${item.statementId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ goalId }),
+          });
+        } catch (err) {
+          console.error(`Failed to save goalId to statement ${item.statementId}:`, err);
+        }
+      }
 
       // Upsert rule: match on pattern only for now.
       const existingRulesRes = await fetch(
@@ -303,12 +337,28 @@ export async function POST(request: Request) {
       );
 
       let ruleId: string | null = null;
+      let existingRule: { useCount?: number; overrideCount?: number } | null = null;
       if (existingRulesRes.ok) {
         const data = (await existingRulesRes.json()) as {
-          items?: Array<{ id: string }>;
+          items?: Array<{ id: string; useCount?: number; overrideCount?: number }>;
         };
-        ruleId = data.items?.[0]?.id ?? null;
+        const existing = data.items?.[0];
+        ruleId = existing?.id ?? null;
+        existingRule = existing ?? null;
       }
+
+      // Check if user overrode an auto-tagged suggestion
+      const wasOverride = item.wasAutoTagged && 
+        item.originalSuggestion &&
+        (item.originalSuggestion.targetType !== targetType ||
+         item.originalSuggestion.targetSection !== targetSection ||
+         item.originalSuggestion.targetName !== targetName);
+
+      // Update usage statistics
+      const currentUseCount = existingRule?.useCount ?? 0;
+      const currentOverrideCount = existingRule?.overrideCount ?? 0;
+      const newUseCount = wasOverride ? currentUseCount : currentUseCount + 1;
+      const newOverrideCount = wasOverride ? currentOverrideCount + 1 : currentOverrideCount;
 
       // Note: subsection is not stored separately - name IS the subsection in PocketBase
       const rulePayload = {
@@ -317,6 +367,9 @@ export async function POST(request: Request) {
         targetType,
         targetSection,
         targetName, // This is the subsection/name
+        goalId: goalId ?? null,
+        useCount: newUseCount,
+        overrideCount: newOverrideCount,
       };
 
       let ruleSaveOk = false;
@@ -331,12 +384,18 @@ export async function POST(request: Request) {
         );
         ruleSaveOk = res.ok;
       } else {
+        // New rule - initialize with useCount=1 if not an override
+        const newRulePayload = {
+          ...rulePayload,
+          useCount: wasOverride ? 0 : 1,
+          overrideCount: wasOverride ? 1 : 0,
+        };
         const res = await fetch(
           `${base}/api/collections/statement_tag_rules/records`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(rulePayload),
+            body: JSON.stringify(newRulePayload),
           }
         );
         ruleSaveOk = res.ok;

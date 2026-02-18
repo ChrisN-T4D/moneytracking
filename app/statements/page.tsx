@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import type { StatementTagTargetType } from "@/lib/types";
 
@@ -111,6 +111,13 @@ export default function StatementsPage() {
     spanish_fork: "Spanish Fork (Rental)",
   };
   const [applying, setApplying] = useState(false);
+
+  // When opened from hamburger "Add paychecks from statements", scroll to this section
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#fill-from-statements") {
+      document.getElementById("fill-from-statements")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
 
   function groupKeyFromTypeAndSection(
     targetType: StatementTagTargetType,
@@ -706,7 +713,7 @@ export default function StatementsPage() {
         )}
 
         {/* Fill main page from statements */}
-        <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4">
+        <div id="fill-from-statements" className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 scroll-mt-4">
           <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 mb-2">
             Fill main page from statements
           </p>

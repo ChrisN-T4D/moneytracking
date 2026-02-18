@@ -96,6 +96,26 @@ export interface SuggestedBill {
 }
 
 /**
+ * Sum of paycheck-like deposits for the same calendar month as refDate.
+ * Used to show "Paid this month" in the paychecks section.
+ */
+export function getPaycheckDepositsThisMonth(
+  statements: StatementRecord[],
+  refDate: Date
+): number {
+  const y = refDate.getFullYear();
+  const m = refDate.getMonth();
+  let sum = 0;
+  for (const s of statements) {
+    if (s.amount <= 0) continue;
+    if (!isPaycheckLike(s.description)) continue;
+    const d = new Date(s.date);
+    if (d.getFullYear() === y && d.getMonth() === m) sum += s.amount;
+  }
+  return sum;
+}
+
+/**
  * Group deposits by normalized description and infer paychecks.
  */
 export function suggestPaychecksFromStatements(statements: StatementRecord[]): SuggestedPaycheck[] {
@@ -187,7 +207,10 @@ export function billNameFromDescription(description: string): string {
   if (/\bProg\s*Preferred|Progressive/i.test(s)) return "Progressive Insurance";
   if (/\bThe\s*Ridge\s*at\s*Spa/i.test(s)) return "The Ridge at Spa";
   if (/\bOG\s*&\s*E|OG&E/i.test(s)) return "OG&E (Electricity)";
-  if (/\bWalmart|Wal-Mart/i.test(s)) return "Walmart";
+  // Walmart: explicit name or bank format "Store# City ST" (e.g. "#4390 Enid OK")
+  if (/\bWalmart|Wal-Mart|Wal Mart/i.test(s)) return "Walmart";
+  if (/^#?\s*\d{4,5}\s+[A-Za-z]+\s+[A-Z]{2}$/.test(s)) return "Walmart";
+  if (/\bWM\s*#|WAL\s*MART\s*#/i.test(s)) return "Walmart";
   if (/\bSpotify/i.test(s)) return "Spotify";
   if (/\bHBO\s*Max|Hbomax/i.test(s)) return "HBO Max";
   if (/\bNetflix/i.test(s)) return "Netflix";

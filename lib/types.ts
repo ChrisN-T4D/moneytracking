@@ -55,6 +55,16 @@ export interface PaycheckConfig {
   /** For monthly (fixed day): day of month 1–31. Not used for monthlyLastWorkingDay. */
   dayOfMonth: number | null;
   amount: number | null;
+  /** When set, this paycheck counts toward "Paid this month" for the given year-month (e.g. "2026-02"). */
+  paidThisMonthYearMonth?: string | null;
+  /** Amount that counts toward "Paid this month" when paidThisMonthYearMonth matches current month. */
+  amountPaidThisMonth?: number | null;
+  /** User id of who last edited (for audit). */
+  lastEditedByUserId?: string | null;
+  /** Display name or email of who last edited. */
+  lastEditedBy?: string | null;
+  /** When the record was last edited (ISO string). */
+  lastEditedAt?: string | null;
 }
 
 /** Section definition from PocketBase – which sections to show and in what order. */
@@ -84,6 +94,8 @@ export interface StatementRecord {
   category?: string | null;
   account?: string | null;
   sourceFile?: string | null;
+  /** Optional goal id this statement contributes to (PocketBase `goals` collection). */
+  goalId?: string | null;
 }
 
 /** Learned rule for tagging statement rows into sections/types. */
@@ -93,6 +105,8 @@ export type StatementTagTargetType =
   | "spanish_fork"
   | "auto_transfer"
   | "ignore";
+
+export type ConfidenceLevel = "HIGH" | "MEDIUM" | "LOW";
 
 export interface StatementTagRule {
   id: string;
@@ -105,4 +119,21 @@ export interface StatementTagRule {
   targetSection: BillListAccount | "spanish_fork" | null;
   /** Name to use on the main page (bill/auto-transfer name). */
   targetName: string | null;
+  /** Optional goal ID this statement contributes to (PocketBase `goals` collection). */
+  goalId?: string | null;
+  /** Number of times this rule has been successfully applied. */
+  useCount?: number;
+  /** Number of times this rule was overridden by user (indicates lower confidence). */
+  overrideCount?: number;
+}
+
+export interface MoneyGoal {
+  id: string;
+  name: string;
+  targetAmount: number;
+  currentAmount: number;
+  /** Optional ISO date string like 2026-12-31 */
+  targetDate?: string | null;
+  /** e.g. "Savings", "Debt", etc. */
+  category?: string | null;
 }

@@ -3,9 +3,10 @@ import {
   getNextPaycheckBiweekly,
   getNextPaycheckMonthly,
   getNextPaycheckLastWorkingDayOfMonth,
+  getNextThursdayOnOrAfter,
 } from "./paycheckDates";
 
-/** Placeholder defaults when PocketBase has no records. Replace with real data in PocketBase. */
+/** Fallback configs used when PocketBase has no paycheck records. */
 export const defaultPaycheckConfigs: PaycheckConfig[] = [
   {
     id: "default-biweekly",
@@ -26,38 +27,45 @@ export const defaultPaycheckConfigs: PaycheckConfig[] = [
 ];
 
 export interface NextPaycheckInfo {
+  id: string;
   name: string;
   nextDate: Date;
   amount: number | null;
   frequency: PaycheckConfig["frequency"];
+  lastEditedBy?: string | null;
+  lastEditedAt?: string | null;
 }
 
 /**
- * Compute next paycheck date for each config.
- * Partner A: every other Thursday (biweekly). Partner B: last working day of month.
- * Uses defaults if configs is empty.
+ * Returns the next pay date for each config, on or after `referenceDate`.
+ * Falls back to `defaultPaycheckConfigs` when `configs` is empty.
  */
 export function getNextPaychecks(
   configs: PaycheckConfig[],
-  fromDate: Date = new Date()
+  referenceDate: Date | string = new Date()
 ): NextPaycheckInfo[] {
   const list = configs.length > 0 ? configs : defaultPaycheckConfigs;
   return list.map((c) => {
     let nextDate: Date;
-    if (c.frequency === "biweekly" && c.anchorDate) {
-      nextDate = getNextPaycheckBiweekly(new Date(c.anchorDate), fromDate);
+    if (c.frequency === "biweekly") {
+      nextDate = c.anchorDate
+        ? getNextPaycheckBiweekly(c.anchorDate, referenceDate)
+        : getNextThursdayOnOrAfter(referenceDate);
     } else if (c.frequency === "monthlyLastWorkingDay") {
-      nextDate = getNextPaycheckLastWorkingDayOfMonth(fromDate);
+      nextDate = getNextPaycheckLastWorkingDayOfMonth(referenceDate);
     } else if (c.frequency === "monthly" && c.dayOfMonth != null) {
-      nextDate = getNextPaycheckMonthly(c.dayOfMonth, fromDate);
+      nextDate = getNextPaycheckMonthly(c.dayOfMonth, referenceDate);
     } else {
-      nextDate = fromDate;
+      nextDate = new Date();
     }
     return {
+      id: c.id,
       name: c.name,
       nextDate,
       amount: c.amount ?? null,
       frequency: c.frequency,
+      lastEditedBy: c.lastEditedBy ?? null,
+      lastEditedAt: c.lastEditedAt ?? null,
     };
   });
 }
