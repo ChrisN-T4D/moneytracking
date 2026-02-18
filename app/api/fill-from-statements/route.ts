@@ -86,6 +86,25 @@ export async function GET() {
   }
 }
 
+/** Resolve API base and optional admin auth for creating records (so Create rules can require auth). */
+async function getCreateAuth(): Promise<{ apiBase: string; headers: Record<string, string> }> {
+  const base = getBaseUrl();
+  const apiBase = (baseUrlForAuth() || base).replace(/\/$/, "");
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiBase && email && password) {
+    try {
+      const { token, baseUrl } = await getAdminToken(apiBase, email, password);
+      const resolvedBase = baseUrl.replace(/\/$/, "");
+      return { apiBase: resolvedBase, headers: { ...headers, Authorization: `Bearer ${token}` } };
+    } catch {
+      // fall back to no auth
+    }
+  }
+  return { apiBase: apiBase || getBaseUrl(), headers };
+}
+
 /** POST: create suggested paychecks and/or auto_transfers in PocketBase. */
 export async function POST(request: Request) {
   const base = getBaseUrl();
@@ -117,6 +136,8 @@ export async function POST(request: Request) {
     const createBills = body.createBills === true;
     const selectedBills = Array.isArray(body.bills) ? body.bills : [];
 
+    const { apiBase, headers: createHeaders } = await getCreateAuth();
+
     const existingPaychecks = await getPaychecks();
     const existingAutoTransfers = await getAutoTransfers();
     const existingBills = await getBillsWithMeta();
@@ -130,13 +151,20 @@ export async function POST(request: Request) {
     let autoTransfersCreated = 0;
     let billsCreated = 0;
 
+    const currentYearMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-02"
     if (createPaychecks && selectedPaychecks.length > 0) {
       for (const s of selectedPaychecks) {
         if (existingPaycheckNames.has(s.name.toLowerCase().trim())) continue;
-        const res = await fetch(`${base}/api/collections/paychecks/records`, {
+        const baseRecord = suggestedPaycheckToRecord(s as Parameters<typeof suggestedPaycheckToRecord>[0]);
+        const record = {
+          ...baseRecord,
+          amountPaidThisMonth: s.amount,
+          paidThisMonthYearMonth: currentYearMonth,
+        };
+        const res = await fetch(`${apiBase}/api/collections/paychecks/records`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(suggestedPaycheckToRecord(s as Parameters<typeof suggestedPaycheckToRecord>[0])),
+          headers: createHeaders,
+          body: JSON.stringify(record),
         });
         if (res.ok) {
           paychecksCreated++;
@@ -150,9 +178,9 @@ export async function POST(request: Request) {
       const suggestedAutoTransfers = suggestAutoTransfersFromStatements(statements);
       for (const s of suggestedAutoTransfers) {
         if (existingWhatFors.has(s.whatFor.toLowerCase().trim())) continue;
-        const res = await fetch(`${base}/api/collections/auto_transfers/records`, {
+        const res = await fetch(`${apiBase}/api/collections/auto_transfers/records`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: createHeaders,
           body: JSON.stringify(suggestedAutoTransferToRecord(s)),
         });
         if (res.ok) {
@@ -180,9 +208,9 @@ export async function POST(request: Request) {
             amount: s.amount,
             tenantPaid: null,
           };
-          const res = await fetch(`${base}/api/collections/spanish_fork_bills/records`, {
+          const res = await fetch(`${apiBase}/api/collections/spanish_fork_bills/records`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: createHeaders,
             body: JSON.stringify(sfRecord),
           });
           if (res.ok) {
@@ -198,9 +226,9 @@ export async function POST(request: Request) {
             account,
             lt
           );
-          const res = await fetch(`${base}/api/collections/bills/records`, {
+          const res = await fetch(`${apiBase}/api/collections/bills/records`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: createHeaders,
             body: JSON.stringify(billRecord),
           });
           if (res.ok) {

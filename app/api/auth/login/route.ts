@@ -1,9 +1,6 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import {
-  getPbBase,
-  hasPbAuth,
-  buildAuthCookie,
-} from "@/lib/pocketbase-auth";
+import { AUTH_COOKIE_NAME, getPbBase, hasPbAuth } from "@/lib/pocketbase-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +68,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const response = NextResponse.json({
+    const cookieStore = await cookies();
+    const maxAge = 60 * 60 * 24 * 14; // 14 days
+    cookieStore.set(AUTH_COOKIE_NAME, token, {
+      path: "/",
+      maxAge,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    return NextResponse.json({
       ok: true,
       user: {
         id: user.id,
@@ -80,9 +87,6 @@ export async function POST(request: Request) {
         username: user.username ?? "",
       },
     });
-
-    response.headers.set("Set-Cookie", buildAuthCookie(token));
-    return response;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Login failed.";
     return NextResponse.json(

@@ -57,6 +57,32 @@ export function getCardClasses(paletteId: string): string {
   return CARD_CLASSES[id];
 }
 
+/** Minimal classes for a small color swatch (gradient + border only, no padding). */
+const SWATCH_CLASSES: Record<PaletteId, string> = {
+  default:
+    "rounded-lg border-2 border-slate-200 dark:border-slate-700 bg-gradient-to-br from-slate-100 via-slate-50 to-white dark:from-slate-900/80 dark:via-neutral-950 dark:to-slate-900/60",
+  sky: "rounded-lg border-2 border-sky-300 dark:border-sky-700 bg-gradient-to-br from-sky-100 via-sky-50 to-white dark:from-sky-950/90 dark:via-sky-950/70 dark:to-neutral-950",
+  violet:
+    "rounded-lg border-2 border-violet-300 dark:border-violet-700 bg-gradient-to-br from-violet-100 via-violet-50 to-white dark:from-violet-950/90 dark:via-violet-950/70 dark:to-neutral-950",
+  emerald:
+    "rounded-lg border-2 border-emerald-300 dark:border-emerald-700 bg-gradient-to-br from-emerald-100 via-emerald-50 to-white dark:from-emerald-950/90 dark:via-emerald-950/70 dark:to-neutral-950",
+  amber:
+    "rounded-lg border-2 border-amber-300 dark:border-amber-700 bg-gradient-to-br from-amber-100 via-amber-50 to-white dark:from-amber-950/90 dark:via-amber-950/70 dark:to-neutral-950",
+  rose: "rounded-lg border-2 border-rose-300 dark:border-rose-700 bg-gradient-to-br from-rose-100 via-rose-50 to-white dark:from-rose-950/90 dark:via-rose-950/70 dark:to-neutral-950",
+  teal: "rounded-lg border-2 border-teal-300 dark:border-teal-700 bg-gradient-to-br from-teal-100 via-teal-50 to-white dark:from-teal-950/90 dark:via-teal-950/70 dark:to-neutral-950",
+  indigo:
+    "rounded-lg border-2 border-indigo-300 dark:border-indigo-700 bg-gradient-to-br from-indigo-100 via-indigo-50 to-white dark:from-indigo-950/90 dark:via-indigo-950/70 dark:to-neutral-950",
+  fuchsia:
+    "rounded-lg border-2 border-fuchsia-300 dark:border-fuchsia-700 bg-gradient-to-br from-fuchsia-100 via-fuchsia-50 to-white dark:from-fuchsia-950/90 dark:via-fuchsia-950/70 dark:to-neutral-950",
+  orange:
+    "rounded-lg border-2 border-orange-300 dark:border-orange-700 bg-gradient-to-br from-orange-100 via-orange-50 to-white dark:from-orange-950/90 dark:via-orange-950/70 dark:to-neutral-950",
+};
+
+export function getSwatchClasses(paletteId: string): string {
+  const id = PALETTE_IDS.includes(paletteId as PaletteId) ? (paletteId as PaletteId) : "default";
+  return SWATCH_CLASSES[id];
+}
+
 /** Label text for section headers (e.g. "Amount needed", "Next paychecks"). */
 export function getSectionLabelClasses(paletteId: string): string {
   const id = PALETTE_IDS.includes(paletteId as PaletteId) ? (paletteId as PaletteId) : "default";

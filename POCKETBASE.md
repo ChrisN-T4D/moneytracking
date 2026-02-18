@@ -129,7 +129,9 @@ Single “summary” view (amounts needed, leftover, plan). Use **one** record (
 
 ### 6. `paychecks` (existing)
 
-If you already use this for paychecks, keep it. Fields: `name`, `frequency` (`biweekly` | `monthly` | `monthlyLastWorkingDay`), `anchorDate`, `dayOfMonth`, `amount`.
+If you already use this for paychecks, keep it. Fields: `name`, `frequency` (`biweekly` | `monthly` | `monthlyLastWorkingDay`), `anchorDate`, `dayOfMonth`, `amount`. Optional (for "Paid this month" when adding paychecks from statements): `paidThisMonthYearMonth` (Plain text, e.g. `2026-02`), `amountPaidThisMonth` (Number).
+
+**Edit audit (optional):** To log which user edited each paycheck, add: `lastEditedByUserId` (Plain text), `lastEditedBy` (Plain text, display name or email), `lastEditedAt` (Plain text, ISO date). When a user saves an edit, the app sets these so you can see who last changed the record (e.g. "Edited by Jane · Feb 18, 2026").
 
 ---
 
@@ -146,8 +148,44 @@ One record per transaction row from an uploaded statement CSV. Used by **http://
 | category   | Plain text | no       | Category label |
 | account    | Plain text | no       | Which account (e.g. "Checking") |
 | sourceFile | Plain text | no       | Original CSV filename |
+| goalId     | Plain text | no       | Optional goal ID this statement contributes to (relation to `goals` collection) |
 
-Set **Create** rule so the app can POST new records when importing (e.g. allow create). **List** rule for read if you want to show statements in the app.
+Set **Create** rule so the app can POST new records when importing (e.g. allow create). **List** rule for read if you want to show statements in the app. **Update** rule so the app can set `goalId` when tagging statements.
+
+---
+
+### 8. `goals` (money goals)
+
+Current savings / payoff goals shown on the main page.
+
+| Field         | Type       | Required | Notes |
+|--------------|------------|----------|--------|
+| name         | Plain text | yes      | Goal name (e.g. \"Emergency fund to $5,000\") |
+| targetAmount | Number     | yes      | Total target amount |
+| currentAmount| Number     | yes      | Current progress amount |
+| targetDate   | Plain text | no       | Optional target date (e.g. `2026-12-31`) |
+| category     | Plain text | no       | e.g. `Savings`, `Debt`, etc. |
+
+You can maintain these directly in PocketBase (`goals` collection) or later add UI for editing.
+
+---
+
+### 9. `statement_tag_rules` (learning rules for auto-tagging)
+
+Learned rules that help the app automatically suggest tags (bill, subscription, goal, etc.) for new statement rows based on description patterns. Created automatically when you tag statements in the "Add items to bills" wizard.
+
+| Field                | Type       | Required | Notes |
+|---------------------|------------|----------|--------|
+| pattern              | Plain text | yes      | Match key (first 3 words of description, uppercased) |
+| normalizedDescription| Plain text | no       | Normalized bill/description name |
+| targetType           | Plain text | yes      | One of: `bill`, `subscription`, `spanish_fork`, `auto_transfer`, `ignore` |
+| targetSection        | Plain text | no       | `bills_account`, `checking_account`, `spanish_fork`, or null |
+| targetName           | Plain text | no       | Bill/subscription name (subsection) |
+| goalId               | Plain text | no       | Optional goal ID this pattern should tag to (relation to `goals` collection) |
+
+**How it works:** When you tag a statement row in the wizard, the app creates/updates a rule with the pattern from that description. Future statements matching the same pattern will automatically suggest the same tags (including goal assignment).
+
+**API rules:** Allow **Create** and **Update** so the app can save learned rules. **List** rule for read if you want to view/edit rules.
 
 ---
 
@@ -159,7 +197,12 @@ The app supports **user login** via PocketBase’s built-in **users** collection
 
 PocketBase creates a **users** collection by default. Ensure it has at least **email** and **password** (and optionally **name**, **username**). In PocketBase admin: **Settings** → **Auth** to configure auth options. Users sign in with email (or username) + password.
 
-### 8. `user_preferences` (profile: theme)
+**API Rules for `users` collection:**
+- **Update rule:** `id = @request.auth.id` — allows users to update their own record (name, etc.)
+- **View rule:** `id = @request.auth.id` — allows users to view their own record
+- Other rules (List, Create, Delete) can be more restrictive or empty depending on your needs
+
+### 10. `user_preferences` (profile: theme)
 
 Created automatically by the **Setup** flow when you run “Create collections and seed data” with admin credentials. One record per user; stores theme preferences (section colors).
 

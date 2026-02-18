@@ -29,6 +29,25 @@ export async function getTokenFromCookie(): Promise<string | undefined> {
   return cookie?.value;
 }
 
+/**
+ * Parse JWT payload without verification (used only to get user id for API calls;
+ * actual auth is done by sending the token to PocketBase).
+ * Returns { id: string } or null if token is invalid.
+ */
+export function getUserIdFromToken(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1];
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const json = Buffer.from(base64, "base64").toString("utf8");
+    const decoded = JSON.parse(json) as { id?: string; sub?: string };
+    return decoded.id ?? decoded.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Fetch from PocketBase with Bearer token. */
 export async function pbAuthFetch<T>(
   path: string,
@@ -64,5 +83,8 @@ export function buildAuthCookie(token: string): string {
 
 /** Build Set-Cookie header value to clear auth. */
 export function buildClearAuthCookie(): string {
-  return `${AUTH_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly`;
+  const isProd = process.env.NODE_ENV === "production";
+  let value = `${AUTH_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly`;
+  if (isProd) value += "; Secure";
+  return value;
 }

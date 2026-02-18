@@ -12,6 +12,7 @@ import {
   checkingAccountSubs,
   autoTransfers,
   spanishForkBills,
+  goals,
 } from "./data";
 
 const textField = (name: string, required: boolean) => ({
@@ -270,6 +271,11 @@ export async function createCollections(
         textField("anchorDate", false),
         numberField("dayOfMonth", false),
         numberField("amount", false),
+        textField("paidThisMonthYearMonth", false),
+        numberField("amountPaidThisMonth", false),
+        textField("lastEditedByUserId", false),
+        textField("lastEditedBy", false),
+        textField("lastEditedAt", false),
       ],
     },
     {
@@ -282,6 +288,16 @@ export async function createCollections(
         textField("category", false),
         textField("account", false),
         textField("sourceFile", false),
+      ],
+    },
+    {
+      name: "goals",
+      fields: [
+        textField("name", true),
+        numberField("targetAmount", true),
+        numberField("currentAmount", true),
+        textField("targetDate", false),
+        textField("category", false),
       ],
     },
   ];
@@ -411,6 +427,16 @@ export async function seedData(
     },
   ]);
 
+  await postRecords(
+    "goals",
+    goals.map(({ id: _id, ...g }) => g)
+  );
+
+  await postRecords(
+    "goals",
+    goals.map(({ id: _id, ...g }) => g)
+  );
+
   return counts;
 }
 
@@ -478,6 +504,11 @@ export async function seedDataPublic(baseUrl: string): Promise<SeedDataPublicRes
       planToFamily: initialSummary.planToFamily,
     },
   ]);
+
+  await postRecords(
+    "goals",
+    goals.map(({ id: _id, ...g }) => g)
+  );
 
   return { counts, firstError };
 }

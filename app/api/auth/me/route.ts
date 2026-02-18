@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   getTokenFromCookie,
   getPbBase,
+  getUserIdFromToken,
   hasPbAuth,
   pbAuthFetch,
 } from "@/lib/pocketbase-auth";
@@ -43,31 +44,53 @@ export async function GET() {
     );
   }
 
+  const base = getPbBase();
+
+  let userRecord: PbUser | null = null;
+
   try {
     const refreshed = await pbAuthFetch<{ token?: string; record?: PbUser }>(
       "/api/users/refresh",
       { method: "POST" },
       token
     );
-
-    const userRecord = refreshed.record;
-    if (!userRecord) {
-      return NextResponse.json(
-        { ok: true, user: null, theme: null },
-        { status: 200 }
-      );
+    userRecord = refreshed.record ?? null;
+  } catch {
+    // Refresh can 404 or fail in some setups; fall back to loading user by id from JWT
+    const userId = getUserIdFromToken(token);
+    if (userId) {
+      try {
+        const res = await fetch(`${base}/api/collections/users/records/${userId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (res.ok) {
+          userRecord = (await res.json()) as PbUser;
+        }
+      } catch {
+        // Ignore
+      }
     }
+  }
 
-    const user = {
-      id: userRecord.id,
-      email: userRecord.email ?? "",
-      name: userRecord.name ?? "",
-      username: userRecord.username ?? "",
-    };
+  if (!userRecord) {
+    return NextResponse.json(
+      { ok: true, user: null, theme: null },
+      { status: 200 }
+    );
+  }
 
-    // Load user_preferences (theme) for this user
-    const base = getPbBase();
-    const filter = encodeURIComponent(`user="${userRecord.id}"`);
+  const user = {
+    id: userRecord.id,
+    email: userRecord.email ?? "",
+    name: userRecord.name ?? "",
+    username: userRecord.username ?? "",
+  };
+
+  // Load user_preferences (theme) for this user
+  const filter = encodeURIComponent(`user="${userRecord.id}"`);
+  let theme: Record<string, string> | null = null;
+  try {
     const prefsRes = await fetch(
       `${base}/api/collections/user_preferences/records?filter=${filter}&perPage=1`,
       {
@@ -75,8 +98,6 @@ export async function GET() {
         cache: "no-store",
       }
     );
-
-    let theme: Record<string, string> | null = null;
     if (prefsRes.ok) {
       const prefsData = (await prefsRes.json()) as PbListResponse<UserPreferenceRecord>;
       const prefs = prefsData.items?.[0];
@@ -84,16 +105,13 @@ export async function GET() {
         theme = prefs.theme as Record<string, string>;
       }
     }
-
-    return NextResponse.json({
-      ok: true,
-      user,
-      theme,
-    });
   } catch {
-    return NextResponse.json(
-      { ok: true, user: null, theme: null },
-      { status: 200 }
-    );
+    // Ignore theme load errors
   }
+
+  return NextResponse.json({
+    ok: true,
+    user,
+    theme,
+  });
 }

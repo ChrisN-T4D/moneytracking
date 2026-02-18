@@ -11,10 +11,13 @@ import type {
   StatementRecord,
   StatementTagRule,
   StatementTagTargetType,
+  MoneyGoal,
 } from "./types";
 import type { Frequency } from "./types";
+import { getAdminToken } from "./pocketbase-setup";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
+const POCKETBASE_API_URL = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim();
 // If URL ends with /_ or /_/, the API is often at the root (e.g. https://host.com/api/...).
 // Use root for API calls so fetches work when the UI is at https://host.com/_/
 const BASE = (() => {
@@ -39,25 +42,63 @@ interface PbListResponse<T> {
 
 // --- Paychecks (existing) ---
 
+/** PocketBase returns snake_case in API; we support both for paychecks. */
+type PbPaycheckItem = {
+  id: string;
+  name?: string;
+  frequency?: string;
+  anchorDate?: string;
+  dayOfMonth?: number;
+  amount?: number;
+  paidThisMonthYearMonth?: string | null;
+  amountPaidThisMonth?: number | null;
+  paid_this_month_year_month?: string | null;
+  amount_paid_this_month?: number | null;
+  lastEditedByUserId?: string | null;
+  lastEditedBy?: string | null;
+  lastEditedAt?: string | null;
+  last_edited_by_user_id?: string | null;
+  last_edited_by?: string | null;
+  last_edited_at?: string | null;
+};
+
 export interface PaychecksResponse {
-  items: Array<{
-    id: string;
-    name?: string;
-    frequency?: string;
-    anchorDate?: string;
-    dayOfMonth?: number;
-    amount?: number;
-  }>;
+  items: PbPaycheckItem[];
   totalItems: number;
   page: number;
   perPage: number;
 }
 
-/** Fetch paychecks from PocketBase. Returns empty array if URL not set or request fails. */
+/** Find value in object by key normalized to lowercase no-underscores (e.g. amount_paid_this_month -> amountpaidthismonth). */
+function getByNormalizedKey(obj: Record<string, unknown>, normalized: string): unknown {
+  const want = normalized.toLowerCase().replace(/_/g, "");
+  for (const key of Object.keys(obj)) {
+    if (key.toLowerCase().replace(/_/g, "") === want) return obj[key];
+  }
+  return undefined;
+}
+
+/** Fetch paychecks from PocketBase. Uses admin auth when configured so List rules that require superusers succeed. Paychecks are shared; who edited is stored on each record. */
 export async function getPaychecks(): Promise<PaycheckConfig[]> {
   if (!POCKETBASE_URL) return [];
+  const apiBase = POCKETBASE_API_URL || BASE;
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  let url = `${BASE}/api/collections/paychecks/records`;
+  const headers: Record<string, string> = {};
+  if (apiBase && email && password) {
+    try {
+      const { token, baseUrl } = await getAdminToken(apiBase, email, password);
+      url = `${baseUrl.replace(/\/$/, "")}/api/collections/paychecks/records`;
+      headers.Authorization = `Bearer ${token}`;
+    } catch {
+      // fall back to unauthenticated
+    }
+  }
   try {
-    const data = await pbFetch<PaychecksResponse>("/api/collections/paychecks/records");
+    const res = await fetch(url, { cache: "no-store", ...(Object.keys(headers).length > 0 ? { headers } : {}) });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PaychecksResponse;
     return (data.items ?? []).map((item) => {
       const freq = item.frequency as string;
       const frequency: PaycheckConfig["frequency"] =
@@ -66,13 +107,37 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
           : freq === "monthly"
             ? "monthly"
             : "biweekly";
+      const raw = item as Record<string, unknown>;
+      const paidThisMonthYearMonthRaw =
+        raw.paidThisMonthYearMonth ?? raw.paid_this_month_year_month ?? getByNormalizedKey(raw, "paidThisMonthYearMonth");
+      const paidThisMonthYearMonth =
+        paidThisMonthYearMonthRaw != null && String(paidThisMonthYearMonthRaw).trim() !== ""
+          ? String(paidThisMonthYearMonthRaw).trim()
+          : null;
+      const amountPaidThisMonthRaw =
+        raw.amountPaidThisMonth ?? raw.amount_paid_this_month ?? getByNormalizedKey(raw, "amountPaidThisMonth");
+      const amountPaidThisMonth =
+        amountPaidThisMonthRaw != null && amountPaidThisMonthRaw !== ""
+          ? Number(amountPaidThisMonthRaw)
+          : null;
+      const rawItem = item as Record<string, unknown>;
+      const lastEditedBy = (rawItem.lastEditedBy ?? rawItem.last_edited_by) as string | null | undefined;
+      const lastEditedAt = (rawItem.lastEditedAt ?? rawItem.last_edited_at) as string | null | undefined;
+      const lastEditedByUserId = (rawItem.lastEditedByUserId ?? rawItem.last_edited_by_user_id) as string | null | undefined;
+      const anchorDateRaw = (rawItem.anchorDate ?? rawItem.anchor_date ?? getByNormalizedKey(rawItem, "anchorDate")) as string | null | undefined;
+      const anchorDate = anchorDateRaw != null && String(anchorDateRaw).trim() !== "" ? String(anchorDateRaw).trim() : null;
       return {
         id: item.id,
         name: item.name ?? "",
         frequency,
-        anchorDate: item.anchorDate ?? null,
+        anchorDate,
         dayOfMonth: item.dayOfMonth ?? null,
         amount: item.amount ?? null,
+        paidThisMonthYearMonth,
+        amountPaidThisMonth,
+        lastEditedBy: lastEditedBy ?? null,
+        lastEditedAt: lastEditedAt ?? null,
+        lastEditedByUserId: lastEditedByUserId ?? null,
       };
     });
   } catch {
@@ -290,6 +355,37 @@ export async function getSummary(): Promise<Summary | null> {
   }
 }
 
+// --- Money goals ---
+
+interface PbGoal {
+  id: string;
+  name?: string;
+  targetAmount?: number;
+  currentAmount?: number;
+  targetDate?: string | null;
+  category?: string | null;
+}
+
+/** Fetch money goals from PocketBase. Returns [] if URL not set or request fails. */
+export async function getGoals(): Promise<MoneyGoal[]> {
+  if (!POCKETBASE_URL) return [];
+  try {
+    const data = await pbFetch<PbListResponse<PbGoal>>(
+      "/api/collections/goals/records?perPage=200"
+    );
+    return (data.items ?? []).map((item) => ({
+      id: item.id,
+      name: item.name ?? "",
+      targetAmount: Number(item.targetAmount) || 0,
+      currentAmount: Number(item.currentAmount) || 0,
+      targetDate: item.targetDate ?? null,
+      category: item.category ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // --- Statements (CSV uploads) ---
 
 interface PbStatement {
@@ -301,9 +397,10 @@ interface PbStatement {
   category?: string | null;
   account?: string | null;
   sourceFile?: string | null;
+   goalId?: string | null;
 }
 
-/** Fetch statement records from PocketBase. */
+/** Fetch statement records from PocketBase. Uses no-store so "Paid this month" and other statement-derived data stay fresh after refresh. */
 export async function getStatements(options?: {
   account?: string;
   perPage?: number;
@@ -315,9 +412,9 @@ export async function getStatements(options?: {
     params.set("perPage", String(options?.perPage ?? 500));
     if (options?.sort) params.set("sort", options.sort);
     if (options?.account) params.set("filter", `account="${options.account}"`);
-    const data = await pbFetch<PbListResponse<PbStatement>>(
-      `/api/collections/statements/records?${params}`
-    );
+    const res = await fetch(`${BASE}/api/collections/statements/records?${params}`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PbListResponse<PbStatement>;
     return (data.items ?? []).map((item) => ({
       id: item.id,
       date: item.date ?? "",
@@ -327,6 +424,7 @@ export async function getStatements(options?: {
       category: item.category ?? null,
       account: item.account ?? null,
       sourceFile: item.sourceFile ?? null,
+      goalId: item.goalId ?? null,
     }));
   } catch {
     return [];
@@ -342,6 +440,9 @@ interface PbStatementTagRule {
   targetType?: string;
   targetSection?: string | null;
   targetName?: string;
+  goalId?: string | null;
+  useCount?: number;
+  overrideCount?: number;
 }
 
 /** Fetch statement tagging rules from PocketBase. Returns [] if URL not set or request fails. */
@@ -359,6 +460,9 @@ export async function getStatementTagRules(): Promise<StatementTagRule[]> {
       targetSection:
         (item.targetSection as BillListAccount | "spanish_fork" | null) ?? null,
       targetName: item.targetName ?? null,
+      goalId: item.goalId ?? null,
+      useCount: item.useCount ?? 0,
+      overrideCount: item.overrideCount ?? 0,
     }));
   } catch {
     return [];
