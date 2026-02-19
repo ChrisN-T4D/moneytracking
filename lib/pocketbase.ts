@@ -327,6 +327,9 @@ interface PbSummary {
   leftOver?: number;
   leftOverPerPaycheck?: number;
   planToFamily?: string | null;
+  checkingBalance?: number | null;
+  billsBalance?: number | null;
+  spanishForkBalance?: number | null;
 }
 
 /** Fetch summary (first record) from PocketBase. Returns null if URL not set or request fails. */
@@ -349,6 +352,9 @@ export async function getSummary(): Promise<Summary | null> {
       leftOver: Number(item.leftOver) || 0,
       leftOverPerPaycheck: Number(item.leftOverPerPaycheck) || 0,
       planToFamily: item.planToFamily ?? "",
+      checkingBalance: item.checkingBalance != null ? Number(item.checkingBalance) : null,
+      billsBalance: item.billsBalance != null ? Number(item.billsBalance) : null,
+      spanishForkBalance: item.spanishForkBalance != null ? Number(item.spanishForkBalance) : null,
     };
   } catch {
     return null;
@@ -364,6 +370,7 @@ interface PbGoal {
   currentAmount?: number;
   targetDate?: string | null;
   category?: string | null;
+  monthlyContribution?: number | null;
 }
 
 /** Fetch money goals from PocketBase. Returns [] if URL not set or request fails. */
@@ -380,6 +387,7 @@ export async function getGoals(): Promise<MoneyGoal[]> {
       currentAmount: Number(item.currentAmount) || 0,
       targetDate: item.targetDate ?? null,
       category: item.category ?? null,
+      monthlyContribution: item.monthlyContribution != null ? Number(item.monthlyContribution) : null,
     }));
   } catch {
     return [];

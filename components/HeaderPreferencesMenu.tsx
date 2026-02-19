@@ -16,12 +16,12 @@ export function HeaderPreferencesMenu() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-neutral-200 bg-white/80 text-neutral-700 shadow-sm hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900/80 dark:text-neutral-200 dark:hover:bg-neutral-800"
+        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full border border-neutral-200 bg-white/80 px-4 text-neutral-700 shadow-sm hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900/80 dark:text-neutral-200 dark:hover:bg-neutral-800"
         aria-label="Open preferences"
       >
         <span className="sr-only">Open preferences</span>
         <svg
-          className="h-4 w-4"
+          className="h-4 w-4 shrink-0"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -36,7 +36,7 @@ export function HeaderPreferencesMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-64 rounded-xl border border-neutral-200 bg-white/95 p-3 text-xs shadow-lg dark:border-neutral-700 dark:bg-neutral-900/95">
+        <div className="absolute right-0 z-[100] mt-4 w-64 rounded-xl border border-neutral-200 bg-white/95 p-3 text-xs shadow-lg dark:border-neutral-700 dark:bg-neutral-900/95">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-neutral-500 dark:text-neutral-400">
               Preferences
@@ -44,7 +44,7 @@ export function HeaderPreferencesMenu() {
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-neutral-300 bg-neutral-100 text-neutral-600 shadow-sm hover:bg-neutral-200 hover:text-neutral-800 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
               aria-label="Close preferences"
             >
               ×
@@ -57,7 +57,7 @@ export function HeaderPreferencesMenu() {
             </p>
             <button
               type="button"
-              className="block w-full rounded-lg px-2 py-1.5 text-left text-[11px] font-medium text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              className="w-full rounded-full bg-neutral-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-neutral-500 dark:bg-neutral-500 dark:hover:bg-neutral-400"
               onClick={() => {
                 setOpen(false);
                 router.push("/profile");
@@ -67,13 +67,13 @@ export function HeaderPreferencesMenu() {
             </button>
             <button
               type="button"
-              className="block w-full rounded-lg px-2 py-1.5 text-left text-[11px] font-medium text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              className="w-full rounded-full bg-neutral-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-neutral-500 dark:bg-neutral-500 dark:hover:bg-neutral-400"
               onClick={() => {
                 setOpen(false);
                 router.push("/statements");
               }}
             >
-              Statements
+              Statement upload
             </button>
             <div className="pt-0.5 space-y-1.5">
               <button

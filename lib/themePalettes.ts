@@ -83,7 +83,7 @@ export function getSwatchClasses(paletteId: string): string {
   return SWATCH_CLASSES[id];
 }
 
-/** Label text for section headers (e.g. "Amount needed", "Next paychecks"). */
+/** Label text for section headers (e.g. "Current money status", "Next paychecks"). */
 export function getSectionLabelClasses(paletteId: string): string {
   const id = PALETTE_IDS.includes(paletteId as PaletteId) ? (paletteId as PaletteId) : "default";
   const colorMap: Record<PaletteId, string> = {

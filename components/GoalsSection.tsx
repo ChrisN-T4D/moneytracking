@@ -1,26 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { formatCurrency } from "@/lib/format";
 import type { MoneyGoal } from "@/lib/types";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
+import { useGoals } from "./GoalsContext";
 
-interface GoalsSectionProps {
-  goals: MoneyGoal[];
-}
-
-export function GoalsSection({ goals: initialGoals }: GoalsSectionProps) {
+export function GoalsSection() {
   const { theme } = useTheme();
-  // Filter out deleted static goals (stored in localStorage)
-  const [goals, setGoals] = useState<MoneyGoal[]>(() => {
-    try {
-      const deleted = JSON.parse(localStorage.getItem("deletedStaticGoals") || "[]") as string[];
-      return initialGoals.filter((g) => !deleted.includes(g.id));
-    } catch {
-      return initialGoals;
-    }
-  });
+  const { goals, setGoals, updateGoalContribution } = useGoals();
   const [name, setName] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
   const [category, setCategory] = useState("");
@@ -28,6 +17,11 @@ export function GoalsSection({ goals: initialGoals }: GoalsSectionProps) {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // Inline monthly contribution editing: goalId → editing value
+  const [editingContrib, setEditingContrib] = useState<string | null>(null);
+  const [contribValue, setContribValue] = useState("");
+  const [contribError, setContribError] = useState<string | null>(null);
+  const contribRef = useRef<HTMLInputElement>(null);
 
   async function handleAddGoal(e: React.FormEvent) {
     e.preventDefault();
@@ -65,6 +59,30 @@ export function GoalsSection({ goals: initialGoals }: GoalsSectionProps) {
       setError(err instanceof Error ? err.message : "Failed to create goal.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveContrib(goalId: string) {
+    const num = contribValue.trim() === "" ? null : Number(contribValue);
+    setEditingContrib(null);
+    setContribError(null);
+    // Update context immediately — SummaryCard left over updates instantly
+    updateGoalContribution(goalId, num);
+    const isStaticGoal = goalId.length < 10 || /^g\d+$/.test(goalId);
+    if (isStaticGoal) return; // static goals: context update is enough, no PB record
+    try {
+      const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ monthlyContribution: num }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        setContribError(data.message ?? `Save failed (${res.status})`);
+      }
+    } catch {
+      setContribError("Could not connect to server.");
     }
   }
 
@@ -180,6 +198,11 @@ export function GoalsSection({ goals: initialGoals }: GoalsSectionProps) {
           {error}
         </p>
       )}
+      {contribError && (
+        <p className="mb-2 text-[11px] text-amber-600 dark:text-amber-400">
+          Contribution save error: {contribError}
+        </p>
+      )}
 
       {goals.length > 0 && (
         <ul className="space-y-3">
@@ -193,8 +216,8 @@ export function GoalsSection({ goals: initialGoals }: GoalsSectionProps) {
                 key={g.id}
                 className="rounded-lg bg-white/60 dark:bg-neutral-950/40 p-2.5 border border-neutral-100/70 dark:border-neutral-800/70"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
                       {g.name}
                     </p>
@@ -203,8 +226,41 @@ export function GoalsSection({ goals: initialGoals }: GoalsSectionProps) {
                         {g.category}
                       </p>
                     )}
+                    {/* Monthly contribution inline edit */}
+                    <div className="mt-1 flex items-center gap-1">
+                      <span className="text-[11px] text-neutral-500 dark:text-neutral-400">Monthly:</span>
+                      {editingContrib === g.id ? (
+                        <input
+                          ref={contribRef}
+                          autoFocus
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          value={contribValue}
+                          onChange={(e) => setContribValue(e.target.value)}
+                          onBlur={() => void handleSaveContrib(g.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void handleSaveContrib(g.id);
+                            if (e.key === "Escape") setEditingContrib(null);
+                          }}
+                          className="w-20 rounded border border-sky-400 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-right text-xs tabular-nums text-neutral-900 dark:text-neutral-100 outline-none"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingContrib(g.id);
+                            setContribValue(g.monthlyContribution != null ? String(g.monthlyContribution) : "");
+                          }}
+                          className="text-[11px] text-amber-600 dark:text-amber-400 underline-offset-2 hover:underline cursor-text"
+                          title="Tap to set monthly contribution"
+                        >
+                          {g.monthlyContribution != null ? formatCurrency(g.monthlyContribution) + "/mo" : "Set contribution"}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <div className="text-right text-xs text-neutral-600 dark:text-neutral-300">
                       <p>
                         {formatCurrency(g.currentAmount)} / {formatCurrency(g.targetAmount)}

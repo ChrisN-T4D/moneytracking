@@ -15,13 +15,9 @@ export async function GET() {
       );
     }
 
-    const base = baseUrl.replace(/\/$/, "");
-    const candidates: string[] = [base];
-    if (base.endsWith("/_")) {
-      candidates.push(base.replace(/\/_\/?$/, ""));
-    } else {
-      candidates.push(`${base}/_`);
-    }
+    // Normalise: strip /_ so we probe root (the REST API), not the admin UI path
+    const base = baseUrl.replace(/\/$/, "").replace(/\/_\/?$/, "");
+    const candidates: string[] = [base, `${base}/_`];
 
     const results: Array<{ base: string; healthUrl: string; status: number | null; error?: string }> = [];
     for (const b of candidates) {
@@ -40,10 +36,12 @@ export async function GET() {
     }
 
     const working = results.find((r) => r.status === 200);
+    // Always probe admin auth at root (strip /_ so we don't hit admin UI path)
+    const workingRoot = working ? working.base.replace(/\/_\/?$/, "") : null;
     let adminAuthStatus: number | null = null;
     let adminAuthUrl: string | null = null;
-    if (working) {
-      adminAuthUrl = `${working.base}/api/admins/auth-with-password`;
+    if (workingRoot) {
+      adminAuthUrl = `${workingRoot}/api/admins/auth-with-password`;
       try {
         const authRes = await fetch(adminAuthUrl, {
           method: "POST",
@@ -61,7 +59,7 @@ export async function GET() {
       {
         ok: !!working,
         message: working
-          ? `API reachable at ${working.base}`
+          ? `API reachable at ${workingRoot}`
           : "No base URL returned 200 for /api/health. Your host may block /api/* or use a different path.",
         results,
         adminAuth: adminAuthUrl

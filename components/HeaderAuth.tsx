@@ -70,7 +70,7 @@ export function HeaderAuth() {
   if (user) {
     return (
       <div className="flex items-center gap-2">
-        <span className="text-xs text-neutral-600 dark:text-neutral-400 truncate max-w-[120px]" title={user.name ? `${user.name} (${user.email})` : user.email}>
+        <span className="text-xs text-neutral-600 dark:text-neutral-400 shrink-0 whitespace-nowrap" title={user.name ? `${user.name} (${user.email})` : user.email}>
           {user.name || user.email || user.username || "Signed in"}
         </span>
         <button

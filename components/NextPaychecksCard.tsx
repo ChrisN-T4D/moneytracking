@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { formatCurrency } from "@/lib/format";
-import { formatDateShort, daysUntil } from "@/lib/paycheckDates";
+import { formatDateNoYear, formatDateShort, daysUntil, billingMonthNameForLastWorkingDay } from "@/lib/paycheckDates";
 import { getNextPaychecks, type NextPaycheckInfo } from "@/lib/paycheckConfig";
 import type { PaycheckConfig, PaycheckFrequency } from "@/lib/types";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
@@ -93,10 +93,13 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
           const isToday = days === 0;
           const isPast = days < 0;
           const isEditing = editing?.id === p.id;
+          const billingMonth = p.frequency === "monthlyLastWorkingDay"
+            ? billingMonthNameForLastWorkingDay(p.nextDate)
+            : null;
           return (
             <li
               key={p.id}
-              className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 py-2 border-b border-neutral-100 dark:border-neutral-700/50 last:border-0"
+              className="py-2 border-b border-neutral-100 dark:border-neutral-700/50 last:border-0"
             >
               {isEditing ? (
                 <form onSubmit={handleSave} className="w-full space-y-2">
@@ -153,54 +156,67 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                 </form>
               ) : (
                 <>
-                  <div>
-                    <span className="font-medium text-neutral-800 dark:text-neutral-200">
+                  {/* Line 1: name (left) + date + amount (right, grouped so amount isn't far right) */}
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span
+                      className="font-medium text-neutral-800 dark:text-neutral-200 shrink-0"
+                      title={
+                        (p.lastEditedBy || p.lastEditedAt)
+                          ? [
+                              p.lastEditedBy ? `Edited by ${p.lastEditedBy}` : "",
+                              p.lastEditedAt
+                                ? new Date(p.lastEditedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+                                : "",
+                            ].filter(Boolean).join(" · ")
+                          : undefined
+                      }
+                    >
                       {p.name}
                     </span>
-                    <span className="ml-2 text-xs text-neutral-500 dark:text-neutral-400">
+                    <div className="flex items-baseline gap-3 shrink-0">
+                      <span
+                        className={
+                          isToday
+                            ? "text-amber-600 dark:text-amber-400 font-semibold"
+                            : isPast
+                              ? "text-neutral-400 dark:text-neutral-500 text-sm italic line-through"
+                              : "text-emerald-700 dark:text-emerald-400 font-medium"
+                        }
+                      >
+                        {formatDateNoYear(p.nextDate)}
+                      </span>
+                      <span className="text-sm font-medium tabular-nums">
+                        {p.amount != null && p.amount > 0 ? formatCurrency(p.amount) : "—"}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Line 2: "for March" (small) + freq / days / edit */}
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    {billingMonth && (
+                      <span className="text-[10px] leading-tight bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded px-1 py-0.5 font-medium">
+                        for {billingMonth}
+                      </span>
+                    )}
+                    <span className="text-xs text-neutral-500 dark:text-neutral-400">
                       {p.frequency === "biweekly"
                         ? "every other Thu"
                         : p.frequency === "monthlyLastWorkingDay"
                           ? "last working day"
                           : "monthly"}
+                      {!isPast && days !== 0 && (
+                        <> · {days === 1 ? "tomorrow" : `${days}d`}</>
+                      )}
+                      {isToday && <> · today</>}
                     </span>
                     {canEdit && !p.id.startsWith("default-") && (
                       <button
                         type="button"
                         onClick={() => setEditing(p)}
-                        className="ml-2 text-xs text-neutral-500 underline hover:text-neutral-700 dark:hover:text-neutral-300"
+                        className="text-xs text-neutral-500 underline hover:text-neutral-700 dark:hover:text-neutral-300"
                       >
                         Edit
                       </button>
                     )}
-                    {(p.lastEditedBy || p.lastEditedAt) && (
-                      <span className="ml-2 text-[10px] text-neutral-400 dark:text-neutral-500" title={p.lastEditedAt ?? undefined}>
-                        {p.lastEditedBy && `Edited by ${p.lastEditedBy}`}
-                        {p.lastEditedBy && p.lastEditedAt && " · "}
-                        {p.lastEditedAt && new Date(p.lastEditedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-baseline gap-2">
-                    <span
-                      className={
-                        isToday
-                          ? "text-amber-600 dark:text-amber-400 font-semibold"
-                          : isPast
-                            ? "text-neutral-400 dark:text-neutral-500 text-sm italic line-through"
-                            : "text-emerald-700 dark:text-emerald-400 font-medium"
-                      }
-                    >
-                      {formatDateShort(p.nextDate)}
-                    </span>
-                    {!isPast && (
-                      <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                        {days === 0 ? "today" : days === 1 ? "tomorrow" : `${days} days`}
-                      </span>
-                    )}
-                    <span className="text-sm font-medium tabular-nums min-w-[4rem] text-right">
-                      {p.amount != null && p.amount > 0 ? formatCurrency(p.amount) : "—"}
-                    </span>
                   </div>
                 </>
               )}

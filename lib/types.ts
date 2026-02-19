@@ -41,6 +41,10 @@ export interface Summary {
   leftOver: number;
   leftOverPerPaycheck: number;
   planToFamily: string;
+  /** Manually entered current balances, updated every ~2 weeks */
+  checkingBalance?: number | null;
+  billsBalance?: number | null;
+  spanishForkBalance?: number | null;
 }
 
 /** Paycheck config from PocketBase or defaults (for next-pay date calculation). */
@@ -136,4 +140,6 @@ export interface MoneyGoal {
   targetDate?: string | null;
   /** e.g. "Savings", "Debt", etc. */
   category?: string | null;
+  /** How much to put toward this goal per month */
+  monthlyContribution?: number | null;
 }
