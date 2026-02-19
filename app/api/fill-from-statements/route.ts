@@ -151,7 +151,10 @@ export async function POST(request: Request) {
     let autoTransfersCreated = 0;
     let billsCreated = 0;
 
-    const currentYearMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-02"
+    const now = new Date();
+    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    // For last-working-day paychecks received this month, store paidThisMonthYearMonth as THIS month
+    // (the billing-month shift is applied on read in page.tsx, so storage stays as the pay month).
     if (createPaychecks && selectedPaychecks.length > 0) {
       for (const s of selectedPaychecks) {
         if (existingPaycheckNames.has(s.name.toLowerCase().trim())) continue;

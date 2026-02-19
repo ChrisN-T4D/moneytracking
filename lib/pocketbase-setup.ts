@@ -67,17 +67,18 @@ async function probeHealth(base: string): Promise<boolean> {
   }
 }
 
-/** Discover which base URL has the PocketBase API (try /api/health). */
+/** Discover which base URL has the PocketBase API (try /api/health).
+ *  Always returns the root API base (strips /_ so callers use /api/... not /_/api/...). */
 async function discoverApiBase(baseUrl: string): Promise<string | null> {
   const base = baseUrl.replace(/\/$/, "");
-  const candidates = [base];
-  if (base.endsWith("/_")) {
-    candidates.push(base.replace(/\/_\/?$/, ""));
-  } else {
-    candidates.push(`${base}/_`);
-  }
+  // Normalise: strip /_  to get the real root (/_/ is the admin UI, not the API base)
+  const root = base.replace(/\/_\/?$/, "");
+  const candidates = [root, `${root}/_`];
   for (const b of candidates) {
-    if (await probeHealth(b)) return b;
+    if (await probeHealth(b)) {
+      // Always return root, not the /_  variant – PocketBase API is at root/api/…
+      return root;
+    }
   }
   return null;
 }
@@ -124,24 +125,21 @@ async function getSuperuserTokenAt(
   return token;
 }
 
-/** Get admin/superuser token from PocketBase. Tries /api/admins first, then /api/collections/_superusers (Admin UI endpoint). */
+/** Get admin/superuser token from PocketBase. Tries /api/admins first, then /api/collections/_superusers (Admin UI endpoint).
+ *  Always returns baseUrl stripped of any /_ suffix so callers use root/api/… paths. */
 export async function getAdminToken(
   baseUrl: string,
   email: string,
   password: string
 ): Promise<{ token: string; baseUrl: string }> {
-  const base = baseUrl.replace(/\/$/, "");
+  const base = baseUrl.replace(/\/$/, "").replace(/\/_\/?$/, "");
   const discovered = await discoverApiBase(base);
-  const tryBases = discovered ? [discovered] : [base];
-  if (!discovered && base.endsWith("/_")) {
-    tryBases.push(base.replace(/\/_\/?$/, ""));
-  } else if (!discovered) {
-    tryBases.push(`${base}/_`);
-  }
+  // discoverApiBase always returns root (no /_); fallback: try root itself
+  const tryBases = discovered ? [discovered] : [base, `${base}/_`];
 
-  const body = { identity: email, password };
   for (const b of tryBases) {
-    const apiBase = b.replace(/\/$/, "");
+    // Always use root API base — strip /_ even in fallback candidates
+    const apiBase = b.replace(/\/$/, "").replace(/\/_\/?$/, "");
 
     try {
       const token = await getAdminTokenAt(apiBase, email, password);

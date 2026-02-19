@@ -17,6 +17,15 @@ You can create all collections and seed them with default data **from the websit
 
 You can run it again with **Seed only** checked to re-seed records (e.g. after changing default data); collections won’t be re-created.
 
+
+### "Update bill amounts from budget" returns 404
+
+The **Preferences → Update bill amounts from budget** button (which applies amounts from your budget PDF to the `bills` and `spanish_fork_bills` collections) uses the same API base as setup. If you see **"Failed to list bills: 404"**:
+
+1. Set **`POCKETBASE_API_URL`** in `.env.local` to the **root** URL where your PocketBase API is (e.g. `https://yoursite.com` with no `/_` path). Leave `NEXT_PUBLIC_POCKETBASE_URL` as-is for the app UI.
+2. Ensure the **`bills`** and **`spanish_fork_bills`** collections exist (they are created by the setup flow above). If you created collections manually, their API names must be exactly `bills` and `spanish_fork_bills`.
+3. Restart the dev server after changing env.
+
 ### If your host blocks the admin API (404 on setup)
 
 **“Seed data without admin” only adds records.** It does **not** create collections or add fields. You must create every collection and every field yourself in PocketBase first.

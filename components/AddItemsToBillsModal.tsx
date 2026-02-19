@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { StatementTagTargetType } from "@/lib/types";
 
 const BATCH_SIZE = 10;
@@ -275,6 +276,16 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     if (open && tagSuggestions.length === 0 && tagStatus !== "loading") void loadTagSuggestions();
   }, [open]);
 
+  // Lock body scroll when modal is open so only the modal content scrolls
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
   const openModal = () => {
     if (!isControlled) setInternalOpen(true);
     if (tagSuggestions.length === 0) void loadTagSuggestions();
@@ -292,18 +303,23 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         </button>
       )}
 
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-neutral-950/60 px-4 backdrop-blur-sm"
-          onClick={closeModal}
-        >
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
           <div
-            className="bg-gradient-to-b from-sky-50/60 via-white to-white dark:from-neutral-900 dark:via-neutral-950 dark:to-neutral-950 rounded-2xl shadow-2xl max-w-3xl w-[95vw] max-h-[80vh] flex flex-col border border-neutral-200/70 dark:border-neutral-800"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[100] flex min-h-[100dvh] items-center justify-center bg-neutral-950/70 p-4 backdrop-blur-sm"
+            onClick={closeModal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-items-to-bills-title"
           >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-neutral-200/70 dark:border-neutral-800/80 px-4 py-3 bg-white/70 dark:bg-neutral-900/60 backdrop-blur-sm rounded-t-2xl">
-              <h2 className="text-sm font-semibold tracking-wide text-neutral-900 dark:text-neutral-50">
+            <div
+              className="bg-gradient-to-b from-sky-50/60 via-white to-white dark:from-neutral-900 dark:via-neutral-950 dark:to-neutral-950 rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90dvh] flex flex-col border border-neutral-200/70 dark:border-neutral-800 overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex shrink-0 items-center justify-between border-b border-neutral-200/70 dark:border-neutral-800/80 px-4 py-3 bg-white/70 dark:bg-neutral-900/60 backdrop-blur-sm rounded-t-2xl">
+              <h2 id="add-items-to-bills-title" className="text-sm font-semibold tracking-wide text-neutral-900 dark:text-neutral-50">
                 Add items to bills
               </h2>
               <button
@@ -319,7 +335,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
             </div>
 
             {/* Controls */}
-            <div className="px-4 py-2 border-b border-neutral-100/80 dark:border-neutral-900/80 bg-white/60 dark:bg-neutral-950/40">
+            <div className="shrink-0 px-4 py-2 border-b border-neutral-100/80 dark:border-neutral-900/80 bg-white/60 dark:bg-neutral-950/40">
               {(tagStatus === "error" || tagMessage) && (
                 <p
                   className={`text-sm ${
@@ -363,8 +379,8 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
               </div>
             </div>
 
-            {/* Body */}
-            <div className="flex-1 p-4">
+            {/* Body - scrollable */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {tagSuggestions.length === 0 && tagStatus !== "loading" && (
                 <p className="text-sm text-neutral-600 dark:text-neutral-300">
                   Click &quot;Load statement rows&quot; to fetch statement lines from PocketBase and tag
@@ -553,7 +569,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
 
             {/* Footer: pagination + save actions */}
             {tagSuggestions.length > 0 && (
-              <div className="border-t border-neutral-200 dark:border-neutral-800 px-4 py-2 flex flex-wrap gap-2 items-center justify-between">
+              <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800 px-4 py-2 flex flex-wrap gap-2 items-center justify-between">
                 <div className="flex flex-wrap gap-2 justify-start">
                   <button
                     type="button"
@@ -596,8 +612,9 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
               </div>
             )}
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </>
   );
 }

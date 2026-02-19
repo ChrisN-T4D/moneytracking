@@ -134,27 +134,23 @@ export interface ActualRow {
   actualAmount: number;
 }
 
-export function computeLastMonthActuals(
+/**
+ * Sum tagged statement amounts for a given calendar month, grouped by subsection (section + listType + name).
+ * Used for both "paid this month" (current month) and "Actual {monthName}" (last month).
+ */
+export function computeActualsForMonth(
   statements: StatementRecord[],
   rules: StatementTagRule[],
-  today: Date
-): { monthName: string; rows: ActualRow[] } {
-  const year = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-  const month = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-  const monthName = new Date(year, month, 1).toLocaleString("en-US", {
-    month: "long",
-  });
-
+  year: number,
+  month: number
+): ActualRow[] {
   const monthStart = new Date(year, month, 1);
   const monthEnd = new Date(year, month + 1, 1);
-
   const inMonth = statements.filter((s) => {
     const d = new Date(s.date);
     return d >= monthStart && d < monthEnd;
   });
-
   const suggestions = suggestTagsForStatements(inMonth, rules);
-
   const map = new Map<string, ActualRow>();
 
   for (const sug of suggestions) {
@@ -167,7 +163,6 @@ export function computeLastMonthActuals(
     const listType: BillListType =
       sug.targetType === "subscription" ? "subscriptions" : "bills";
     const key = `${sug.targetSection}|${sug.targetName}|${listType}`;
-
     const prev = map.get(key);
     const amount = Math.abs(sug.statement.amount);
     if (prev) {
@@ -181,7 +176,33 @@ export function computeLastMonthActuals(
       });
     }
   }
+  return Array.from(map.values());
+}
 
-  return { monthName, rows: Array.from(map.values()) };
+/** Last calendar month's actuals (for "Actual {monthName}" table). */
+export function computeLastMonthActuals(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  today: Date
+): { monthName: string; rows: ActualRow[] } {
+  const year = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+  const month = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+  const monthName = new Date(year, month, 1).toLocaleString("en-US", { month: "long" });
+  const rows = computeActualsForMonth(statements, rules, year, month);
+  return { monthName, rows };
+}
+
+/** Current calendar month's actuals — tagged statements count toward each subsection's "paid this month". */
+export function computeThisMonthActuals(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  today: Date
+): ActualRow[] {
+  return computeActualsForMonth(
+    statements,
+    rules,
+    today.getFullYear(),
+    today.getMonth()
+  );
 }
 

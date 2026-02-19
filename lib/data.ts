@@ -14,22 +14,22 @@ export const initialSummary: Summary = {
 };
 
 export const billsAccountBills: BillOrSub[] = [
-  { id: "1", name: "Tithing (Bills Acct)", frequency: "monthly", nextDue: "Feb 28, 2026", inThisPaycheck: true, amount: 632.42, autoTransferNote: "Covered by monthly income transfer" },
-  { id: "2", name: "Mortgage (Bills Acct)", frequency: "monthly", nextDue: "Feb 28, 2026", inThisPaycheck: true, amount: 1886.96, autoTransferNote: "Covered by monthly income transfer" },
+  { id: "1", name: "Tithing", frequency: "monthly", nextDue: "Feb 28, 2026", inThisPaycheck: true, amount: 632.42, autoTransferNote: "Covered by monthly income transfer" },
+  { id: "2", name: "Mortgage", frequency: "monthly", nextDue: "Feb 28, 2026", inThisPaycheck: true, amount: 1886.96, autoTransferNote: "Covered by monthly income transfer" },
   { id: "3", name: "Oklahoma Natural Gas", frequency: "monthly", nextDue: "Feb 28, 2026", inThisPaycheck: true, amount: 140, autoTransferNote: "Covered by monthly income transfer" },
   { id: "4", name: "State Farm Auto Insurance", frequency: "monthly", nextDue: "Mar 12, 2026", inThisPaycheck: true, amount: 241, autoTransferNote: "Covered by monthly income transfer" },
   { id: "5", name: "BluePeak (Internet)", frequency: "monthly", nextDue: "Mar 26, 2026", inThisPaycheck: false, amount: 65, autoTransferNote: "Covered by monthly income transfer" },
-  { id: "6", name: "Fast Offerings (Bills Acct)", frequency: "monthly", nextDue: "Mar 3, 2026", inThisPaycheck: true, amount: 50, autoTransferNote: "Covered by monthly income transfer" },
+  { id: "6", name: "Fast Offerings", frequency: "monthly", nextDue: "Mar 3, 2026", inThisPaycheck: true, amount: 50, autoTransferNote: "Covered by monthly income transfer" },
   { id: "7", name: "OG & E (Electricity)", frequency: "monthly", nextDue: "Mar 11, 2026", inThisPaycheck: true, amount: 200, autoTransferNote: "Covered by monthly income transfer" },
   { id: "8", name: "Oklahoma City of Enid", frequency: "monthly", nextDue: "Feb 17, 2026", inThisPaycheck: false, amount: 100, autoTransferNote: "Covered by monthly income transfer" },
   { id: "9", name: "Life Insurance", frequency: "monthly", nextDue: "Mar 24, 2026", inThisPaycheck: false, amount: 226.14, autoTransferNote: "Covered by monthly income transfer" },
 ];
 
 export const billsAccountSubs: BillOrSub[] = [
-  { id: "s1", name: "Spotify (Bills Acct)", frequency: "monthly", nextDue: "Mar 2, 2026", inThisPaycheck: true, amount: 10.71 },
-  { id: "s2", name: "Walmart + (Bills Acct)", frequency: "yearly", nextDue: "Jan 21, 2028", inThisPaycheck: false, amount: 98 },
-  { id: "s3", name: "Disney + Premium (Bills Acct)", frequency: "yearly", nextDue: "Nov 11, 2027", inThisPaycheck: false, amount: 189 },
-  { id: "s4", name: "Phone Bill - Mint Mobile (Bills Acct)", frequency: "yearly", nextDue: "Dec 25, 2027", inThisPaycheck: false, amount: 600 },
+  { id: "s1", name: "Spotify", frequency: "monthly", nextDue: "Mar 2, 2026", inThisPaycheck: true, amount: 10.71 },
+  { id: "s2", name: "Walmart +", frequency: "yearly", nextDue: "Jan 21, 2028", inThisPaycheck: false, amount: 98 },
+  { id: "s3", name: "Disney + Premium", frequency: "yearly", nextDue: "Nov 11, 2027", inThisPaycheck: false, amount: 189 },
+  { id: "s4", name: "Phone Bill - Mint Mobile", frequency: "yearly", nextDue: "Dec 25, 2027", inThisPaycheck: false, amount: 600 },
 ];
 
 export const checkingAccountBills: BillOrSub[] = [
@@ -55,12 +55,12 @@ export const checkingAccountSubs: BillOrSub[] = [
 ];
 
 export const autoTransfers: AutoTransfer[] = [
-  { id: "a1", whatFor: "Oklahoma Bill Covering", frequency: "Monthly", account: "Oklahoma Bills", date: "2/2/2026", amount: 3400 },
-  { id: "a2", whatFor: "Oklahoma Bill Remaining", frequency: "2 Weeks", account: "Oklahoma Bills", date: "1/30/2026", amount: 80 },
-  { id: "a3", whatFor: "Spanish Fork Bill Covering", frequency: "2 Weeks", account: "Spanish Fork Bills", date: "1/30/2026", amount: 300 },
-  { id: "a4", whatFor: "Subscription Covering", frequency: "2 Weeks", account: "Spanish Fork Bills", date: "1/30/2026", amount: 35 },
-  { id: "a5", whatFor: "Fun Money (A)", frequency: "2 Weeks", account: "Account A", date: "1/30/2026", amount: 100 },
-  { id: "a6", whatFor: "Fun Money (B)", frequency: "2 Weeks", account: "Account B", date: "1/30/2026", amount: 100 },
+  { id: "a1", whatFor: "Bills covering", frequency: "Monthly", account: "Bills", date: "2/2/2026", amount: 3400 },
+  { id: "a2", whatFor: "Bills remaining", frequency: "2 Weeks", account: "Bills", date: "1/30/2026", amount: 80 },
+  { id: "a3", whatFor: "Spanish Fork covering", frequency: "2 Weeks", account: "Spanish Fork", date: "1/30/2026", amount: 300 },
+  { id: "a4", whatFor: "Subscription covering", frequency: "2 Weeks", account: "Spanish Fork", date: "1/30/2026", amount: 35 },
+  { id: "a5", whatFor: "Fun Money (Chris)", frequency: "2 Weeks", account: "Checking", date: "1/30/2026", amount: 100 },
+  { id: "a6", whatFor: "Fun Money (Melodee)", frequency: "2 Weeks", account: "Checking", date: "1/30/2026", amount: 100 },
 ];
 
 export const spanishForkBills: SpanishForkBill[] = [
@@ -81,6 +81,7 @@ export const goals: MoneyGoal[] = [
     currentAmount: 2500,
     targetDate: "2026-12-31",
     category: "Savings",
+    monthlyContribution: 100,
   },
   {
     id: "g2",
@@ -89,5 +90,6 @@ export const goals: MoneyGoal[] = [
     currentAmount: 1200,
     targetDate: "2026-08-01",
     category: "Debt",
+    monthlyContribution: 200,
   },
 ];
