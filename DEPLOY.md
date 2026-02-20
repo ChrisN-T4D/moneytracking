@@ -1,0 +1,114 @@
+# Hosting on Portainer
+
+## Where to put PocketBase admin credentials (never in GitHub)
+
+The app needs your **PocketBase admin email and password** for server-side API calls (e.g. paychecks, setup, statements). Set them **only** in one of these places:
+
+1. **Portainer (recommended):** In your stack or container → **Environment variables** → add:
+   - `NEXT_PUBLIC_POCKETBASE_URL` = your PocketBase URL (e.g. `https://your-pb.com`)
+   - `POCKETBASE_ADMIN_EMAIL` = the email you use to log into the PocketBase admin UI
+   - `POCKETBASE_ADMIN_PASSWORD` = that account’s password
+
+2. **Env file on the server:** Create a file on the server (e.g. `~/neu-money-tracking.env`) with the same variables. Do **not** commit this file or put it in the repo. In Portainer, point the stack/container to it via **Env** → **Load from file** (or use `env_file` in docker-compose and mount the path).
+
+These values are **server-only** (no `NEXT_PUBLIC_`), so they are not embedded in the browser. Never add them to the repo or `.env.example` with real values.
+
+---
+
+## Deploy with Web editor + Traefik (paste compose, no Git)
+
+1. **Build the image** on your machine or a build server:
+   ```bash
+   docker build -t neu-money-tracking:latest .
+   ```
+   Push to a registry, or copy the image onto the server where Portainer runs (e.g. `docker save` / `docker load`).
+
+2. **In Portainer:** Stacks → **Add stack** → Build method: **Web editor**.
+
+3. **Paste** the contents of `docker-compose.yml` from this repo into the editor.
+
+4. **Edit in the editor:**
+   - **Traefik hostname:** In the label `traefik.http.routers.neu-money-tracking.rule`, replace `money.yourdomain.com` with your domain (e.g. `money.example.com`).
+   - **Traefik network:** If your Traefik stack uses a different external network name (e.g. `proxy`), change the last line from `traefik:` to that name under `networks:` and in `services.app.networks`.
+   - **Image without build:** If the image is already on the server or in a registry, remove the `build: .` line so the stack only uses `image: neu-money-tracking:latest` (or your registry path). Then deploy without “Build from repo”.
+
+5. **Environment variables:** In the stack, add `NEXT_PUBLIC_POCKETBASE_URL`, `POCKETBASE_ADMIN_EMAIL`, `POCKETBASE_ADMIN_PASSWORD` (see above).
+
+6. **Deploy the stack.** Traefik will route `https://your-domain` to the container’s port 3000. The app listens on 3000 inside the container; the `ports: "3002:3000"` mapping is optional for direct access.
+
+---
+
+## Option 1: Deploy as a Stack (Git build)
+
+1. **On your machine:** Build and push an image (if you use a registry), or use Portainer’s Git build.
+
+2. **In Portainer:**  
+   - **Stacks** → **Add stack**  
+   - Name: e.g. `neu-money-tracking`  
+   - Build method: **Web editor** (paste `docker-compose.yml`) or **Git repository**  
+   - If using Web editor, paste the compose file and set env vars as above.
+
+3. **Set environment variables** (see “Where to put PocketBase admin credentials” above).
+
+4. **Build and deploy:**  
+   - With **Web editor** + pre-built image: remove `build: .` and deploy.  
+   - With **Git repository**: set repo URL and compose path so Portainer can build.
+
+5. With Traefik, the app is reached at your configured hostname. Without Traefik, use `http://your-server:3002`.
+
+---
+
+## Option 2: Build image locally and run in Portainer
+
+1. **On your machine** (where the repo is):
+
+   ```bash
+   cd moneytracking
+   docker build -t neu-money-tracking:latest .
+   ```
+
+2. **Export the image** (if the Portainer server is another machine):
+
+   ```bash
+   docker save neu-money-tracking:latest -o neu-money-tracking.tar
+   ```
+
+   Copy `neu-money-tracking.tar` to the server, then on the server:
+
+   ```bash
+   docker load -i neu-money-tracking.tar
+   ```
+
+   Or push to a registry (Docker Hub, GitHub Container Registry, etc.) and pull from Portainer.
+
+3. **In Portainer:**  
+   - **Containers** → **Add container**  
+   - Image: `neu-money-tracking:latest`  
+   - Port mapping: host `3002` → container `3000`  
+   - **Env** → add (see “Where to put PocketBase admin credentials” above):
+     - `NEXT_PUBLIC_POCKETBASE_URL` = your PocketBase URL  
+     - `POCKETBASE_ADMIN_EMAIL` = your PocketBase admin email  
+     - `POCKETBASE_ADMIN_PASSWORD` = your PocketBase admin password  
+   - **Restart policy:** Unless stopped  
+   - Deploy.
+
+4. Open `http://your-server:3002`.
+
+---
+
+## Option 3: Stack from Git (Portainer builds from repo)
+
+1. In Portainer: **Stacks** → **Add stack**.
+2. Build method: **Git repository**.
+3. Repository URL: your repo (e.g. `https://github.com/ChrisN-T4D/moneytracking.git`).
+4. Compose path: `docker-compose.yml`.
+5. Add environment variables in the stack (see “Where to put PocketBase admin credentials” above): `NEXT_PUBLIC_POCKETBASE_URL`, `POCKETBASE_ADMIN_EMAIL`, `POCKETBASE_ADMIN_PASSWORD`.
+6. Deploy. Portainer will clone, build, and run. The app is on port 3002.
+
+---
+
+## Notes
+
+- **PocketBase** is separate. The app only needs `NEXT_PUBLIC_POCKETBASE_URL` pointing to your PocketBase instance (same server or elsewhere). No need to run PocketBase in this stack unless you want to.
+- **Port 3002** avoids conflicts with other apps. Change the host port in `docker-compose.yml` (e.g. `"8080:3000"`) if you prefer.
+- **HTTPS:** Put the app behind a reverse proxy (Traefik, Caddy, Nginx) on the same server and terminate SSL there.
