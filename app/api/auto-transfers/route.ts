@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let authToken: string | null = await getTokenFromCookie().catch(() => null);
+  let authToken: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
   let apiBase = base;
 
   if (!authToken) {

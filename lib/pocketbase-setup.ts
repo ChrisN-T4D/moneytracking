@@ -260,6 +260,10 @@ export async function createCollections(
         numberField("leftOver", false),
         numberField("leftOverPerPaycheck", false),
         textField("planToFamily", false),
+        numberField("checkingBalance", false),
+        numberField("billsBalance", false),
+        numberField("spanishForkBalance", false),
+        numberField("spanishForkTenantRentMonthly", false),
       ],
     },
     {
@@ -365,7 +369,7 @@ const defaultSections = [
   { sortOrder: 2, type: "bills_list", title: "Bills (Checking Account)", subtitle: "Checking bills", account: "checking_account", listType: "bills" },
   { sortOrder: 3, type: "bills_list", title: "Subscriptions (Checking Account)", subtitle: "", account: "checking_account", listType: "subscriptions" },
   { sortOrder: 4, type: "spanish_fork", title: "Spanish Fork (Rental)", subtitle: "Bills with tenant paid amounts", account: "", listType: "" },
-  { sortOrder: 5, type: "auto_transfers", title: "Auto transfers", subtitle: "What for, frequency, account, date, amount", account: "", listType: "" },
+  { sortOrder: 5, type: "auto_transfers", title: "Auto transfers", subtitle: "Money moved between accounts to cover what we need (e.g. to Bills account, Spanish Fork account). Fun money isn't tracked here.", account: "", listType: "" },
 ];
 
 /** Seed all collections with data from lib/data.ts. */

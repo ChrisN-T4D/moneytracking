@@ -8,6 +8,7 @@ import type { MoneyStatus } from "@/lib/summaryCalculations";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
 import { useGoals } from "./GoalsContext";
+import { IncomeVsNeededChart } from "./IncomeVsNeededChart";
 
 interface SummaryCardProps {
   moneyStatus: MoneyStatus;
@@ -24,6 +25,8 @@ const ACCOUNT_LABELS: Record<AccountKey, string> = {
 export function SummaryCard({ moneyStatus }: SummaryCardProps) {
   const { theme } = useTheme();
   const { forMonthName, paychecksThisMonth, payDates, predictedNeed, autoTransfersIn, accountBalances, paidThisMonth, leftOverComputed, variableExpensesThisMonth = 0, variableExpensesBreakdown = [] } = moneyStatus;
+  const incomeNextMonth = (moneyStatus as { incomeNextMonth?: number }).incomeNextMonth;
+  const nextMonthName = (moneyStatus as { nextMonthName?: string }).nextMonthName;
   // Use context so goal contribution changes reflect instantly (no server round-trip needed)
   const { totalMonthlyContributions: totalGoalContributions } = useGoals();
 
@@ -116,6 +119,16 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
         )}
       </div>
 
+      {/* Income vs Needed — income for both months, left over for current month only */}
+      <IncomeVsNeededChart
+        incomeCurrentMonth={paychecksThisMonth}
+        incomeNextMonth={incomeNextMonth}
+        nextMonthName={nextMonthName}
+        totalNeeded={predictedNeed.billsAccount + predictedNeed.checkingAccount + predictedNeed.spanishFork}
+        leftOver={leftOverComputed}
+        currentMonthName={forMonthName || undefined}
+      />
+
       {/* Per-account table */}
       <div className="mt-4 border-t border-neutral-200 dark:border-neutral-600 pt-4">
         <table className="w-full text-sm">
@@ -183,7 +196,7 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
         </table>
         {saving && <p className="text-xs text-neutral-400 mt-1 text-right">Saving…</p>}
         <p className="text-[11px] text-neutral-400 dark:text-neutral-500 mt-1.5">
-          Tap a current balance to enter actual amount. "(est)" means computed from auto transfers.
+          Tap a current balance to enter actual amount. &quot;(est)&quot; means computed from auto transfers.
         </p>
       </div>
 

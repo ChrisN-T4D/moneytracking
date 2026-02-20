@@ -472,6 +472,7 @@ interface PbSummary {
   checkingBalance?: number | null;
   billsBalance?: number | null;
   spanishForkBalance?: number | null;
+  spanishForkTenantRentMonthly?: number | null;
 }
 
 /** Fetch summary (first record) from PocketBase. Returns null if URL not set or request fails. Uses admin auth when configured so balance fields are readable. */
@@ -496,6 +497,7 @@ export async function getSummary(): Promise<Summary | null> {
       checkingBalance: item.checkingBalance != null ? Number(item.checkingBalance) : null,
       billsBalance: item.billsBalance != null ? Number(item.billsBalance) : null,
       spanishForkBalance: item.spanishForkBalance != null ? Number(item.spanishForkBalance) : null,
+      spanishForkTenantRentMonthly: item.spanishForkTenantRentMonthly != null ? Number(item.spanishForkTenantRentMonthly) : null,
     };
   }
 
@@ -580,7 +582,7 @@ interface PbStatement {
 
 function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
   return (items ?? []).map((item) => {
-    const raw = item as Record<string, unknown>;
+    const raw = item as unknown as Record<string, unknown>;
     const goalIdRaw = raw.goalId ?? raw.goal_id ?? null;
     const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
     return {

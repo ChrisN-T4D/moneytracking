@@ -11,7 +11,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: false, message: "PocketBase URL not configured." }, { status: 500 });
   }
 
-  let body: { checkingBalance?: number | null; billsBalance?: number | null; spanishForkBalance?: number | null };
+  let body: { checkingBalance?: number | null; billsBalance?: number | null; spanishForkBalance?: number | null; spanishForkTenantRentMonthly?: number | null };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -59,6 +59,7 @@ export async function PATCH(request: Request) {
   if (body.checkingBalance !== undefined) payload.checkingBalance = body.checkingBalance ?? null;
   if (body.billsBalance !== undefined) payload.billsBalance = body.billsBalance ?? null;
   if (body.spanishForkBalance !== undefined) payload.spanishForkBalance = body.spanishForkBalance ?? null;
+  if (body.spanishForkTenantRentMonthly !== undefined) payload.spanishForkTenantRentMonthly = body.spanishForkTenantRentMonthly ?? null;
 
   if (Object.keys(payload).length === 0) {
     return NextResponse.json({ ok: false, message: "No fields to update." }, { status: 400 });

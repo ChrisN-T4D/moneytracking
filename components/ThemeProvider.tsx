@@ -53,7 +53,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // Load from profile when logged in and profile has theme; otherwise from localStorage
   useEffect(() => {
-    const fromProfile = parseThemeFromProfile(themeFromProfile);
+    const fromProfile = parseThemeFromProfile(themeFromProfile as Record<string, string> | null);
     if (fromProfile) {
       setTheme((prev) => ({ ...defaultTheme, ...prev, ...fromProfile }));
       return;
@@ -72,7 +72,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // When profile theme arrives after login, merge into state
   useEffect(() => {
     if (!user) return;
-    const fromProfile = parseThemeFromProfile(themeFromProfile);
+    const fromProfile = parseThemeFromProfile(themeFromProfile as Record<string, string> | null);
     if (fromProfile) setTheme((prev) => ({ ...prev, ...fromProfile }));
   }, [user, themeFromProfile]);
 

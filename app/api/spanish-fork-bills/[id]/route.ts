@@ -65,7 +65,7 @@ export async function PATCH(
   }
 
   // Try user auth token first, fall back to admin token
-  let authToken: string | null = await getTokenFromCookie().catch(() => null);
+  let authToken: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
   let apiBase = base;
 
   if (!authToken) {
@@ -123,7 +123,7 @@ export async function DELETE(
     return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
   }
 
-  let authToken: string | null = await getTokenFromCookie().catch(() => null);
+  let authToken: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
   let apiBase = base;
   if (!authToken) {
     const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";

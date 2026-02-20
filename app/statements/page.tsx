@@ -316,11 +316,11 @@ export default function StatementsPage() {
         return;
       }
       const items = data.items ?? [];
-      const subsectionsData = (data.subsections as { bills?: string[]; subscriptions?: string[] }) ?? {
+      const subsectionsData = (data as { subsections?: { bills?: string[]; subscriptions?: string[] } }).subsections ?? {
         bills: [],
         subscriptions: [],
       };
-      const billNamesData = (data.billNames as Record<string, string[]>) ?? {};
+      const billNamesData = (data as { billNames?: Record<string, string[]> }).billNames ?? {};
       setSubsections({
         bills: subsectionsData.bills ?? [],
         subscriptions: subsectionsData.subscriptions ?? [],

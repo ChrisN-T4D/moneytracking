@@ -45,6 +45,8 @@ export interface Summary {
   checkingBalance?: number | null;
   billsBalance?: number | null;
   spanishForkBalance?: number | null;
+  /** Monthly rent from Spanish Fork tenants; offsets Spanish Fork bills in "what we need" */
+  spanishForkTenantRentMonthly?: number | null;
 }
 
 /** Paycheck config from PocketBase or defaults (for next-pay date calculation). */

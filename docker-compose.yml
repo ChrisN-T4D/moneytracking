@@ -1,7 +1,12 @@
-# Neu Money Tracking — paste this into Portainer Stacks > Web editor
-# 1. Replace money.yourdomain.com with your domain (in the Traefik label).
-# 2. Set stack env vars: NEXT_PUBLIC_POCKETBASE_URL, POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD
-# 3. Ensure the external network name matches your Traefik network (e.g. traefik or proxy).
+# Neu Money Tracking — Portainer stack (Git repo build)
+#
+# Set in Portainer stack "Environment variables" (never commit real values):
+#   HOST                          — domain for this app (e.g. your-domain.com)
+#   NEXT_PUBLIC_POCKETBASE_URL    — PocketBase URL
+#   POCKETBASE_ADMIN_EMAIL        — PocketBase admin email
+#   POCKETBASE_ADMIN_PASSWORD     — PocketBase admin password
+#
+# Ensure external network name matches your Traefik network (e.g. traefik_proxy).
 
 services:
   app:
@@ -18,18 +23,27 @@ services:
       - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:-}
       - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:-}
     labels:
-      # Traefik: route by hostname to this container (app listens on 3000)
+      # Enable Traefik
       - "traefik.enable=true"
-      - "traefik.http.routers.neu-money-tracking.rule=Host(`money.yourdomain.com`)"
-      - "traefik.http.routers.neu-money-tracking.entrypoints=websecure"
-      - "traefik.http.services.neu-money-tracking.loadbalancer.server.port=3000"
-      # If you use HTTP (port 80) instead of HTTPS only, use entrypoint "web" or add:
-      # - "traefik.http.routers.neu-money-tracking.entrypoints=web"
+      - "traefik.docker.network=traefik_proxy"
+      # HTTP Routers & Services (HOST from stack env, e.g. your-domain.com)
+      - "traefik.http.routers.nmt.entrypoints=websecure"
+      - "traefik.http.routers.nmt.rule=Host(`${HOST:-your-domain.com}`)"
+      - "traefik.http.routers.nmt.tls.certresolver=le"
+      - "traefik.http.routers.nmt.service=nmt"
+      - "traefik.http.services.nmt.loadbalancer.server.port=3000"
+      # 10GB request/response body limit for this app's router
+      - "traefik.http.routers.nmt.middlewares=limit@docker"
+      - "traefik.http.middlewares.limit.buffering.maxRequestBodyBytes=10737418240"
+      - "traefik.http.middlewares.limit.buffering.memRequestBodyBytes=200000000"
+      - "traefik.http.middlewares.limit.buffering.maxResponseBodyBytes=10737418240"
+      - "traefik.http.middlewares.limit.buffering.memResponseBodyBytes=200000000"
     networks:
       - default
-      - traefik
+      - traefik_proxy
 
 networks:
   default:
-  traefik:
+    name: default
+  traefik_proxy:
     external: true
