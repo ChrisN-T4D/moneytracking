@@ -1,0 +1,35 @@
+# Neu Money Tracking — paste this into Portainer Stacks > Web editor
+# 1. Replace money.yourdomain.com with your domain (in the Traefik label).
+# 2. Set stack env vars: NEXT_PUBLIC_POCKETBASE_URL, POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD
+# 3. Ensure the external network name matches your Traefik network (e.g. traefik or proxy).
+
+services:
+  app:
+    build: .
+    image: neu-money-tracking:latest
+    container_name: neu-money-tracking
+    restart: unless-stopped
+    # Port only needed for direct access; Traefik routes by hostname
+    ports:
+      - "3002:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_POCKETBASE_URL=${NEXT_PUBLIC_POCKETBASE_URL:-}
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:-}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:-}
+    labels:
+      # Traefik: route by hostname to this container (app listens on 3000)
+      - "traefik.enable=true"
+      - "traefik.http.routers.neu-money-tracking.rule=Host(`money.yourdomain.com`)"
+      - "traefik.http.routers.neu-money-tracking.entrypoints=websecure"
+      - "traefik.http.services.neu-money-tracking.loadbalancer.server.port=3000"
+      # If you use HTTP (port 80) instead of HTTPS only, use entrypoint "web" or add:
+      # - "traefik.http.routers.neu-money-tracking.entrypoints=web"
+    networks:
+      - default
+      - traefik
+
+networks:
+  default:
+  traefik:
+    external: true

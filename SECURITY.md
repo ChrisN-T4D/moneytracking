@@ -2,8 +2,9 @@
 
 ## Do not commit to GitHub
 
-- **`.env.local`** — Contains your PocketBase URL and any future secrets. It is in `.gitignore`; never force-add it.
+- **`.env.local`** — Contains your PocketBase URL, **PocketBase admin email/password**, and any other secrets. It is in `.gitignore`; never force-add it.
 - **`.env`**, **`.env.development.local`**, **`.env.production.local`** — Same; keep all env files with real values local-only.
+- **PocketBase admin credentials** — `POCKETBASE_ADMIN_EMAIL` and `POCKETBASE_ADMIN_PASSWORD` are used by the app on the server only. Set them in Portainer (stack/container environment variables) or in an env file on the server that is never in the repo. See [DEPLOY.md](DEPLOY.md).
 - **Real financial data** — Store bills, amounts, and names in PocketBase (or your own backend), not in the repo. The sample data in `lib/data.ts` is generic placeholder only.
 
 ## Before pushing
