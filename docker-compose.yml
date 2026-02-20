@@ -39,11 +39,12 @@ services:
       - "traefik.http.middlewares.limit.buffering.maxResponseBodyBytes=10737418240"
       - "traefik.http.middlewares.limit.buffering.memResponseBodyBytes=200000000"
     networks:
-      - default
+      - nmt_internal
       - traefik_proxy
 
 networks:
-  default:
-    name: default
+  # Do not use name: default — Docker reserves that and returns "operation not permitted"
+  nmt_internal:
+    name: nmt_internal
   traefik_proxy:
     external: true
