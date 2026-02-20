@@ -413,8 +413,23 @@ interface PbSpanishForkBill {
 export async function getSpanishForkBills(paycheckEndDate?: Date | null): Promise<SpanishForkBill[]> {
   if (!POCKETBASE_URL) return [];
   try {
+    // Use admin auth so all records are returned regardless of collection rules
+    const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+    const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+    let fetchBase = BASE;
+    let authHeader: Record<string, string> = {};
+    if (adminEmail && adminPassword) {
+      try {
+        const r = await getAdminToken(POCKETBASE_API_URL || BASE, adminEmail, adminPassword);
+        fetchBase = r.baseUrl.replace(/\/$/, "");
+        authHeader = { Authorization: `Bearer ${r.token}` };
+      } catch { /* fall through to unauthenticated */ }
+    }
     // no-store so tenantPaid changes (e.g. cleared in PocketBase) show after refresh
-    const res = await fetch(`${BASE}/api/collections/spanish_fork_bills/records?perPage=200`, { cache: "no-store" });
+    const res = await fetch(`${fetchBase}/api/collections/spanish_fork_bills/records?perPage=200`, {
+      cache: "no-store",
+      headers: authHeader,
+    });
     if (!res.ok) return [];
     const data = (await res.json()) as PbListResponse<PbSpanishForkBill>;
     const ref = getTodayUTC();

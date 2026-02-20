@@ -209,8 +209,10 @@ export function computeActualsForMonth(
   const inMonth = statements.filter((s) => {
     const d = new Date(s.date);
     if (d < monthStart || d >= monthEnd) return false;
-    // Always exclude transfers — even if a rule was accidentally created for one
-    if (isTransferDescription(s.description ?? "")) return false;
+    // Skip transfer check for statements that have an explicit tag rule — the user
+    // intentionally tagged them (e.g. a utility ACH debit that looks like a transfer).
+    const hasExplicitRule = matchRule(rules, s) !== null;
+    if (!hasExplicitRule && isTransferDescription(s.description ?? "")) return false;
     return true;
   });
   const suggestions = suggestTagsForStatements(inMonth, rules);
@@ -294,7 +296,10 @@ export function computeActualsForMonthWithBreakdown(
   const inMonth = statements.filter((s) => {
     const d = new Date(s.date);
     if (d < monthStart || d >= monthEnd) return false;
-    if (isTransferDescription(s.description ?? "")) return false;
+    // Skip transfer check for statements that have an explicit tag rule — the user
+    // intentionally tagged them (e.g. a utility ACH debit that looks like a transfer).
+    const hasExplicitRule = matchRule(rules, s) !== null;
+    if (!hasExplicitRule && isTransferDescription(s.description ?? "")) return false;
     return true;
   });
   const suggestions = suggestTagsForStatements(inMonth, rules);

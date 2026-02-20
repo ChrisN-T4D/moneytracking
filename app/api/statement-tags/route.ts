@@ -250,37 +250,59 @@ export async function GET() {
       });
     }
 
-    // Show statements that need review or that have a goal (so user can see and edit goal assignments):
-    // - Exclude recurring transfer descriptions.
-    // - Include statements that have a goalId so the user can see them and the goal dropdown is correct.
-    // - Otherwise exclude if a non-ignore rule already matches (statement is "done").
-    const needsReview = statements.filter((s) => {
-      if (isTransferDescription(s.description ?? "")) return false;
-      if (s.goalId) return true; // show statements linked to a goal so user can see and change them
+    // Split statements into two buckets:
+    // 1. needsReview — untagged (no non-ignore rule) or goal-linked
+    // 2. alreadyTagged — has a non-ignore rule match (user can optionally show to re-tag)
+    const needsReview: typeof statements = [];
+    const alreadyTagged: typeof statements = [];
+    for (const s of statements) {
+      if (isTransferDescription(s.description ?? "")) continue;
       const matched = matchRule(rules, s);
-      if (matched && matched.rule.targetType !== "ignore") return false; // Has a non-ignore rule → handled automatically
-      return true;
-    });
+      if (matched && matched.rule.targetType !== "ignore") {
+        alreadyTagged.push(s); // already has a rule → show only when user toggles "show tagged"
+      } else {
+        needsReview.push(s); // untagged or goal-only → always show
+      }
+    }
 
-    // Generate heuristic suggestions for the remaining unreviewed statements
+    // Generate suggestions for untagged statements
     const suggestions = suggestTagsForStatements(needsReview, rules);
+    const taggedSuggestions = suggestTagsForStatements(alreadyTagged, rules);
 
-    // In PocketBase: name = subsection, so targetName IS the subsection. Use statement.goalId when suggestion has none (so goal-linked items show current goal).
-    const payload = suggestions.map((s) => ({
-      id: s.statement.id,
-      date: s.statement.date,
-      description: s.statement.description,
-      amount: s.statement.amount,
-      suggestion: {
-        targetType: s.targetType,
-        targetSection: s.targetSection,
-        targetName: s.targetName,
-        goalId: s.goalId ?? s.statement.goalId ?? null,
-        confidence: s.confidence ?? "LOW",
-        matchType: s.matchType ?? "heuristic",
-        hasMatchedRule: false,
-      },
-    }));
+    const payload = [
+      // Untagged rows first
+      ...suggestions.map((s) => ({
+        id: s.statement.id,
+        date: s.statement.date,
+        description: s.statement.description,
+        amount: s.statement.amount,
+        suggestion: {
+          targetType: s.targetType,
+          targetSection: s.targetSection,
+          targetName: s.targetName,
+          goalId: s.goalId ?? s.statement.goalId ?? null,
+          confidence: s.confidence ?? "LOW",
+          matchType: s.matchType ?? "heuristic",
+          hasMatchedRule: false,
+        },
+      })),
+      // Already-tagged rows (hidden by default, shown via toggle)
+      ...taggedSuggestions.map((s) => ({
+        id: s.statement.id,
+        date: s.statement.date,
+        description: s.statement.description,
+        amount: s.statement.amount,
+        suggestion: {
+          targetType: s.targetType,
+          targetSection: s.targetSection,
+          targetName: s.targetName,
+          goalId: s.goalId ?? s.statement.goalId ?? null,
+          confidence: s.confidence ?? "HIGH",
+          matchType: s.matchType ?? "exact_pattern",
+          hasMatchedRule: true,
+        },
+      })),
+    ];
 
     console.log(`[statement-tags GET] Returning ${payload.length} suggestions`);
     return NextResponse.json({

@@ -66,8 +66,10 @@ export function isTransferDescription(description: string): boolean {
   if (/money\s*transfer\s*authorized/i.test(d)) return true;
 
   // Any bank wire / ACH transfer keyword
+  // Note: "ACH DEBIT" is NOT filtered — it's how banks label outgoing bill payments
+  // (utilities, cable, insurance, etc.), NOT internal account-to-account transfers.
   if (/\bwire\s*transfer\b/i.test(d)) return true;
-  if (/\bACH\s*(transfer|credit|debit)\b/i.test(d)) return true;
+  if (/\bACH\s*(transfer|credit)\b/i.test(d)) return true;
 
   // Goldman Sachs savings transfers ("GOLDMAN SACHS BA TRANSFER …")
   if (/goldman\s*sachs\b.*transfer/i.test(d)) return true;

@@ -337,12 +337,17 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
   const unsavedCount = tagSuggestions.filter((r) => !savedIds.has(r.id)).length;
   // Since we no longer return pre-matched items, autoTaggableCount is always 0
   const autoTaggableCount = 0;
+  const [showTagged, setShowTagged] = useState(false);
   const [page, setPage] = useState(0);
-  const totalPages = tagSuggestions.length > 0 ? Math.ceil(tagSuggestions.length / BATCH_SIZE) : 1;
+
+  const untaggedRows = tagSuggestions.filter((r) => !r.suggestion.hasMatchedRule);
+  const taggedRows = tagSuggestions.filter((r) => r.suggestion.hasMatchedRule);
+  const filteredRows = showTagged ? tagSuggestions : untaggedRows;
+  const totalPages = filteredRows.length > 0 ? Math.ceil(filteredRows.length / BATCH_SIZE) : 1;
   const currentPage = Math.min(page, totalPages - 1);
   const pageStart = currentPage * BATCH_SIZE;
   const pageEnd = pageStart + BATCH_SIZE;
-  const visibleRows = tagSuggestions.slice(pageStart, pageEnd);
+  const visibleRows = filteredRows.slice(pageStart, pageEnd);
 
   async function autoTagMatchingRules() {
     // Only auto-tag HIGH confidence exact pattern matches
@@ -523,8 +528,21 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                 <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {tagSuggestions.length === 0
                     ? "No rows loaded yet."
-                    : `${tagSuggestions.length} need categorizing · ${savedIds.size} saved this session`}
+                    : `${untaggedRows.length} need categorizing · ${taggedRows.length} already tagged · ${savedIds.size} saved this session`}
                 </span>
+                {taggedRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowTagged((v) => !v); setPage(0); }}
+                    className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                      showTagged
+                        ? "border-sky-400 bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50"
+                        : "border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                    }`}
+                  >
+                    {showTagged ? "Hide already tagged" : `Show already tagged (${taggedRows.length})`}
+                  </button>
+                )}
                 {autoTaggableCount > 0 && (
                   <button
                     type="button"
@@ -549,11 +567,15 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
 
             {/* Body - scrollable */}
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
-              {tagSuggestions.length === 0 && tagStatus !== "loading" && (
+              {filteredRows.length === 0 && tagStatus !== "loading" && (
                 <p className="text-sm text-neutral-600 dark:text-neutral-300">
-                  {tagStatus === "success"
-                    ? "All done! Every statement has been categorized or is already handled by a rule."
-                    : 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them as bills or subscriptions. Already-categorized statements won\'t appear again.'}
+                  {tagStatus === "success" && tagSuggestions.length === 0
+                    ? 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them.'
+                    : tagStatus === "success" && !showTagged && taggedRows.length > 0
+                    ? `All untagged statements have been categorized. Click "Show already tagged (${taggedRows.length})" to review or change existing tags.`
+                    : tagStatus === "success"
+                    ? "All done! Every statement has been categorized."
+                    : 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them as bills or subscriptions.'}
                 </p>
               )}
               {tagSuggestions.length > 0 && (

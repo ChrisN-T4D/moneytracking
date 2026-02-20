@@ -268,7 +268,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
               <th className="py-2 pr-2 font-medium">Name</th>
               <th className="py-2 pr-2 font-medium text-center">Freq</th>
               <th className="py-2 pr-2 font-medium">Due / Last paid</th>
-              <th className="py-2 pr-2 font-medium text-center">In paycheck?</th>
+              <th className="py-2 pr-2 font-medium text-center">Left in paycheck</th>
               <th className="py-2 pr-2 font-medium text-right">Amount</th>
               <th className="py-2 font-medium text-right">Paid this cycle</th>
               {canDelete && <th className="py-2 pl-2 w-9 text-right" aria-label="Delete" />}
@@ -396,11 +396,23 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   <td className="py-2.5 pr-2 text-center">
                     {(() => {
                       const now = new Date(); now.setHours(0, 0, 0, 0);
-                      const twoWeeksOut = new Date(now); twoWeeksOut.setDate(now.getDate() + 14);
-                      const next = effectiveNextDate(item);
-                      // Paid bills: only show ✓ if their NEXT cycle is within 2 weeks
-                      // Unpaid bills: show ✓ if due within 2 weeks (including overdue)
-                      const inPaycheck = next != null && next <= twoWeeksOut;
+                      // Use the actual paycheck end date if available, otherwise fall back to +14 days
+                      const paycheckEnd = paycheckEndDate ?? (() => { const d = new Date(now); d.setDate(d.getDate() + 14); return d; })();
+                      // Current cycle window: paycheckEnd - 14 days → paycheckEnd
+                      const paycheckStart = new Date(paycheckEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+                      const cycle = paidCycleStatus(item, breakdown, paidAmt);
+                      let inPaycheck = false;
+                      if (cycle?.isPaid) {
+                        // Already paid this cycle — never show in "left in paycheck"
+                        inPaycheck = false;
+                      } else if (cycle && !cycle.isPaid) {
+                        // Has payment history but overdue — use nextCycleDate as the due date
+                        inPaycheck = cycle.nextCycleDate <= paycheckEnd;
+                      } else if (item.nextDue) {
+                        // No transaction history — due on or before paycheck end (including overdue)
+                        inPaycheck = new Date(item.nextDue) <= paycheckEnd;
+                      }
                       return inPaycheck ? (
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
                           ✓
