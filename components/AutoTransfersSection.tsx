@@ -54,6 +54,7 @@ export function AutoTransfersSection({ transfers, title = "Auto transfers", subt
   const [amount, setAmount] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (addOpen) {
@@ -105,6 +106,24 @@ export function AutoTransfersSection({ transfers, title = "Auto transfers", subt
     }
   }
 
+  async function handleDelete(id: string) {
+    if (!confirm("Delete this auto transfer?")) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/auto-transfers/${id}`, { method: "DELETE" });
+      const data = (await res.json()) as { ok?: boolean; message?: string };
+      if (!res.ok) {
+        setError(data.message ?? `Error ${res.status}`);
+        return;
+      }
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <section className={getCardClasses(theme.autoTransfers)}>
       <div className="flex items-start justify-between gap-2">
@@ -137,10 +156,17 @@ export function AutoTransfersSection({ transfers, title = "Auto transfers", subt
               <th className="py-2 pr-2 font-medium">Account</th>
               <th className="py-2 pr-2 font-medium w-20">Date</th>
               <th className="py-2 font-medium text-right">Amount</th>
+              <th className="py-2 pl-2 w-9 text-right" aria-label="Delete" />
             </tr>
           </thead>
           <tbody>
-            {transfers.map((t) => (
+            {[...transfers].sort((a, b) => {
+              const da = a.date && a.frequency ? getNextAutoTransferDate(a.date, a.frequency) : new Date(NaN);
+              const db = b.date && b.frequency ? getNextAutoTransferDate(b.date, b.frequency) : new Date(NaN);
+              const ta = Number.isNaN(da.getTime()) ? Infinity : da.getTime();
+              const tb = Number.isNaN(db.getTime()) ? Infinity : db.getTime();
+              return ta - tb;
+            }).map((t) => (
               <tr
                 key={t.id}
                 className="border-b border-neutral-100 dark:border-neutral-700/50 last:border-0"
@@ -157,6 +183,20 @@ export function AutoTransfersSection({ transfers, title = "Auto transfers", subt
                     : t.date || "—"}
                 </td>
                 <td className="py-2.5 text-right font-semibold tabular-nums">{formatCurrency(t.amount)}</td>
+                <td className="py-2.5 pl-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(t.id)}
+                    disabled={deletingId === t.id}
+                    className="rounded p-1 text-neutral-400 hover:text-red-600 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-950/40 disabled:opacity-50"
+                    title="Delete this auto transfer"
+                    aria-label={`Delete ${displayAutoTransferWhatFor(t.whatFor)}`}
+                  >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

@@ -191,12 +191,18 @@ export interface MoneyStatus {
   autoTransfersIn: AutoTransfersMonthlyByAccount;
   /** Total monthly contributions across all goals */
   totalGoalContributions: number;
-  /** Left over: paychecks - auto transfers out - checking predicted need - goal contributions */
+  /** Left over: paychecks - auto transfers out - checking predicted need - goal contributions - variableExpensesThisMonth */
   leftOverComputed: number;
+  /** Variable expenses this month (tagged as variable_expense); subtracted from left over */
+  variableExpensesThisMonth: number;
+  /** Breakdown of transactions tagged as variable expenses (for drill-down modal) */
+  variableExpensesBreakdown?: { date: string; description: string; amount: number }[];
   /** Manually entered current account balances (from summary record) */
   accountBalances: { checking: number | null; bills: number | null; spanishFork: number | null };
   /** What's actually been paid/transferred this month per account (from tagged statements) */
   paidThisMonth: { checking: number; bills: number; spanishFork: number };
+  /** Combined Groceries & Gas subsection (checking): budget from bills, spent from tagged statements */
+  subsections?: { groceriesAndGas: { budget: number; spent: number } };
 }
 
 export function computeMoneyStatus(
@@ -207,10 +213,11 @@ export function computeMoneyStatus(
   forMonthName: string = "",
   totalGoalContributions: number = 0,
   accountBalances: { checking: number | null; bills: number | null; spanishFork: number | null } = { checking: null, bills: null, spanishFork: null },
-  paidThisMonth: { checking: number; bills: number; spanishFork: number } = { checking: 0, bills: 0, spanishFork: 0 }
+  paidThisMonth: { checking: number; bills: number; spanishFork: number } = { checking: 0, bills: 0, spanishFork: 0 },
+  variableExpensesThisMonth: number = 0
 ): MoneyStatus {
   const leftOverComputed =
-    paychecksThisMonth - autoTransfers.outFromChecking - predictedNeed.checkingAccount - totalGoalContributions;
+    paychecksThisMonth - autoTransfers.outFromChecking - predictedNeed.checkingAccount - totalGoalContributions - variableExpensesThisMonth;
   return {
     forMonthName,
     paychecksThisMonth,
@@ -219,6 +226,7 @@ export function computeMoneyStatus(
     autoTransfersIn: autoTransfers,
     totalGoalContributions,
     leftOverComputed,
+    variableExpensesThisMonth,
     accountBalances,
     paidThisMonth,
   };

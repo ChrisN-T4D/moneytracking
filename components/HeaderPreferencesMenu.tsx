@@ -4,9 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AddItemsToBillsModal } from "@/components/AddItemsToBillsModal";
 import { AddPaychecksFromStatementsModal } from "@/components/AddPaychecksFromStatementsModal";
+import { StatementUploadModal } from "@/components/StatementUploadModal";
 
 export function HeaderPreferencesMenu() {
   const [open, setOpen] = useState(false);
+  const [openUploadModal, setOpenUploadModal] = useState(false);
   const [openPaychecksModal, setOpenPaychecksModal] = useState(false);
   const [openBillsModal, setOpenBillsModal] = useState(false);
   const router = useRouter();
@@ -70,7 +72,7 @@ export function HeaderPreferencesMenu() {
               className="w-full rounded-full bg-neutral-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-neutral-500 dark:bg-neutral-500 dark:hover:bg-neutral-400"
               onClick={() => {
                 setOpen(false);
-                router.push("/statements");
+                setOpenUploadModal(true);
               }}
             >
               Statement upload
@@ -101,6 +103,7 @@ export function HeaderPreferencesMenu() {
         </div>
       )}
 
+      <StatementUploadModal open={openUploadModal} onClose={() => setOpenUploadModal(false)} />
       <AddPaychecksFromStatementsModal open={openPaychecksModal} onClose={() => setOpenPaychecksModal(false)} />
       <AddItemsToBillsModal open={openBillsModal} onClose={() => setOpenBillsModal(false)} />
     </div>

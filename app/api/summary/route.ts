@@ -18,19 +18,25 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: false, message: "Invalid JSON body." }, { status: 400 });
   }
 
-  let authToken: string | null = await getTokenFromCookie().catch(() => null);
+  let authToken: string | null = null;
   let apiBase = base;
-  if (!authToken) {
-    const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
-    const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
-    if (email && password) {
-      try {
-        const r = await getAdminToken(base, email, password);
-        authToken = r.token;
-        apiBase = r.baseUrl;
-      } catch { /* fall through */ }
-    }
+
+  // Prefer admin auth when configured — more reliable than cookie token which may be stale
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  if (email && password) {
+    try {
+      const r = await getAdminToken(base, email, password);
+      authToken = r.token;
+      apiBase = r.baseUrl;
+    } catch { /* fall through to cookie */ }
   }
+
+  // Fall back to cookie token if admin auth not configured or failed
+  if (!authToken) {
+    authToken = (await getTokenFromCookie().catch(() => null)) ?? null;
+  }
+
   if (!authToken) {
     return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
   }

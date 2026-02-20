@@ -6,6 +6,21 @@ import {
   getNextThursdayOnOrAfter,
 } from "./paycheckDates";
 
+/**
+ * Next biweekly pay date from the biweekly config (prefers one named "Quest" when present).
+ * Used to sync "in this paycheck" window with the actual biweekly pay schedule (e.g. Quest Diagnostics).
+ */
+export function getNextBiweeklyPayDate(
+  configs: PaycheckConfig[],
+  referenceDate: Date | string = new Date()
+): Date | null {
+  const biweekly =
+    configs.find((c) => c.frequency === "biweekly" && /quest/i.test(c.name ?? "")) ??
+    configs.find((c) => c.frequency === "biweekly");
+  if (!biweekly?.anchorDate) return null;
+  return getNextPaycheckBiweekly(biweekly.anchorDate, referenceDate);
+}
+
 /** Fallback configs used when PocketBase has no paycheck records. */
 export const defaultPaycheckConfigs: PaycheckConfig[] = [
   {
@@ -32,6 +47,7 @@ export interface NextPaycheckInfo {
   nextDate: Date;
   amount: number | null;
   frequency: PaycheckConfig["frequency"];
+  anchorDate: string | null;
   lastEditedBy?: string | null;
   lastEditedAt?: string | null;
 }
@@ -64,6 +80,7 @@ export function getNextPaychecks(
       nextDate,
       amount: c.amount ?? null,
       frequency: c.frequency,
+      anchorDate: c.anchorDate ?? null,
       lastEditedBy: c.lastEditedBy ?? null,
       lastEditedAt: c.lastEditedAt ?? null,
     };

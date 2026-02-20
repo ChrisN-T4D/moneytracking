@@ -20,13 +20,15 @@ export function getNextThursdayOnOrAfter(date: Date | string): Date {
   return d;
 }
 
-/** Next pay date in a biweekly (every-other-Thursday) series on or after `referenceDate`. */
+/** Next pay date in a biweekly series on or after `referenceDate`. Uses anchor as the actual last pay date and advances by 14 days (so e.g. anchor Feb 13 → next Feb 27). */
 export function getNextPaycheckBiweekly(
   anchorDate: Date | string,
   referenceDate: Date | string = new Date()
 ): Date {
   const from = toLocalDay(referenceDate);
-  const next = getNextThursdayOnOrAfter(anchorDate);
+  const anchor = toLocalDay(anchorDate);
+  if (Number.isNaN(anchor.getTime())) return anchor;
+  const next = new Date(anchor.getTime());
   while (next < from) next.setDate(next.getDate() + 14);
   return toLocalDay(next);
 }
@@ -76,9 +78,23 @@ export function formatDateNoYear(d: Date): string {
 /** Format a date string as "Mon D" (no year). Handles YYYY-MM-DD and other parseable formats. */
 export function formatDateStringNoYear(dateStr: string): string {
   if (!dateStr || !dateStr.trim()) return dateStr;
-  const d = parseLocalDateString(dateStr.trim());
+  const d = parseFlexibleDate(dateStr.trim());
   if (Number.isNaN(d.getTime())) return dateStr;
   return formatDateNoYear(d);
+}
+
+/** Format for due dates: "Mon D" when same year, "Mon D 'YY" when yearly or other year (abbreviated year for reference). */
+export function formatDateForDue(dateStr: string, frequency?: string): string {
+  if (!dateStr || !dateStr.trim()) return "—";
+  const d = parseFlexibleDate(dateStr.trim());
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const f = (frequency ?? "").toLowerCase();
+  const isYearly = f.includes("year");
+  const refYear = getTodayUTC().getUTCFullYear();
+  const showYear = isYearly || d.getFullYear() !== refYear;
+  if (!showYear) return formatDateNoYear(d);
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${toLocalDay(d).toLocaleDateString("en-US", { month: "short", day: "numeric" })} '${yy}`;
 }
 
 /**
@@ -175,4 +191,59 @@ export function getNextAutoTransferDate(
     return toLocalDay(cand);
   }
   return anchor >= ref ? toLocalDay(anchor) : toLocalDay(ref);
+}
+
+/** Format a Date as YYYY-MM-DD. */
+export function formatDateToYYYYMMDD(d: Date): string {
+  const x = toLocalDay(d);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Start of today in UTC (00:00:00 UTC). Use as reference so server timezone doesn't block advancing past-due dates. */
+export function getTodayUTC(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+/** True if date is within the next 14 days from ref (inclusive: ref through ref+14). */
+export function isDueInNextTwoWeeks(date: Date, ref: Date | string = new Date()): boolean {
+  const r = typeof ref === "string" ? parseFlexibleDate(ref) : toLocalDay(ref);
+  const d = toLocalDay(date);
+  if (Number.isNaN(d.getTime()) || Number.isNaN(r.getTime())) return false;
+  const days = Math.round((d.getTime() - r.getTime()) / 86_400_000);
+  return days >= 0 && days <= 14;
+}
+
+/**
+ * Next due date on or after reference, advanced by frequency.
+ * Returns the next due date string (YYYY-MM-DD) and whether it falls in "this paycheck" window.
+ * When paycheckEndDate is provided (e.g. next biweekly pay date), "in this paycheck" = due on or before that date.
+ * Otherwise uses a fixed 14-day window from referenceDate.
+ * Use getTodayUTC() as referenceDate when computing on the server so dates advance correctly regardless of server timezone.
+ */
+export function getNextDueAndPaycheck(
+  nextDueStr: string,
+  frequency: string,
+  referenceDate: Date | string = new Date(),
+  paycheckEndDate?: Date | null
+): { nextDue: string; inThisPaycheck: boolean } {
+  const ref = typeof referenceDate === "string" ? parseFlexibleDate(referenceDate) : toLocalDay(referenceDate);
+  const biweeklyEnd =
+    paycheckEndDate != null && !Number.isNaN(toLocalDay(paycheckEndDate).getTime())
+      ? toLocalDay(paycheckEndDate)
+      : null;
+
+  // Next due: always advance by frequency from stored date (so 2-week items keep your actual schedule, e.g. last pay Feb 13 → next due Feb 27)
+  const next = getNextAutoTransferDate(nextDueStr, frequency, ref);
+
+  if (Number.isNaN(next.getTime())) {
+    return { nextDue: (nextDueStr ?? "").trim() || formatDateToYYYYMMDD(ref), inThisPaycheck: false };
+  }
+  const nextDue = formatDateToYYYYMMDD(next);
+  const inThisPaycheck =
+    biweeklyEnd != null ? next >= ref && next <= biweeklyEnd : isDueInNextTwoWeeks(next, ref);
+  return { nextDue, inThisPaycheck };
 }

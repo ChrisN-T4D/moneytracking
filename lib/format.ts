@@ -15,6 +15,7 @@ export function displayBillName(name: string): string {
     .replace(/\s*\(bills\s+account\)\s*$/i, "")
     .replace(/\s*\(checking\s+acct\.?\)\s*$/i, "")
     .replace(/\s*\(checking\s+account\)\s*$/i, "")
+    .replace(/\s*\(checking\)\s*$/i, "")
     .trim() || name;
 }
 

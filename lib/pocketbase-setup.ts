@@ -223,6 +223,7 @@ export async function createCollections(
         textField("autoTransferNote", false),
         textField("account", true),
         textField("listType", true),
+        textField("subsection", false),
       ],
     },
     {
@@ -243,7 +244,7 @@ export async function createCollections(
         textField("nextDue", true),
         boolField("inThisPaycheck", true),
         numberField("amount", true),
-        numberField("tenantPaid", false),
+        boolField("tenantPaid", false),
       ],
     },
     {
@@ -286,6 +287,7 @@ export async function createCollections(
         textField("category", false),
         textField("account", false),
         textField("sourceFile", false),
+        textField("goalId", false),
       ],
     },
     {
