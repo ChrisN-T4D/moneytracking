@@ -21,7 +21,7 @@ These values are **server-only** (no `NEXT_PUBLIC_`), so they are not embedded i
    ```bash
    docker build -t neu-money-tracking:latest .
    ```
-   Push to a registry, or copy the image onto the server where Portainer runs (e.g. `docker save` / `docker load`).
+   The Dockerfile runs `npm ci` from `package.json` and `package-lock.json`, so **all dependencies** (including those for statement upload, e.g. `unpdf`) are installed during the build. Ensure both files are in the build context (don’t exclude them in `.dockerignore`). Push the image to a registry, or copy it onto the server where Portainer runs (e.g. `docker save` / `docker load`).
 
 2. **In Portainer:** Stacks → **Add stack** → Build method: **Web editor**.
 
@@ -38,6 +38,33 @@ These values are **server-only** (no `NEXT_PUBLIC_`), so they are not embedded i
 
 ---
 
+## Deploy from Git (secrets stay out of the repo)
+
+When you use **Build method: Git repository**, the compose file is pulled from the repo. Sensitive values must **not** be in that file; you provide them in Portainer at deploy time:
+
+1. **In Portainer:** Stacks → Add stack (or edit stack) → Build method: **Git repository**.
+2. Set **Repository URL**, **Branch**, and **Compose path** (e.g. `docker-compose.yml`).
+3. **Environment variables:** In the stack editor, find the **Environment variables** / **Env** section (often below the compose editor or under “Advanced”). Add:
+   - `NEXT_PUBLIC_POCKETBASE_URL` = your PocketBase URL
+   - `POCKETBASE_ADMIN_EMAIL` = admin email
+   - `POCKETBASE_ADMIN_PASSWORD` = admin password  
+   Portainer uses these when deploying: they substitute into `${VAR:-}` in the compose and are passed into the container. They are stored in Portainer, not in Git.
+4. Deploy. The image is built from the repo; the three variables are injected from Portainer only.
+
+Your `docker-compose.yml` in the repo should keep the placeholders exactly as:
+
+```yaml
+environment:
+  - NODE_ENV=production
+  - NEXT_PUBLIC_POCKETBASE_URL=${NEXT_PUBLIC_POCKETBASE_URL:-}
+  - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:-}
+  - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:-}
+```
+
+Do **not** put real URLs or passwords in that file or in any file you commit.
+
+---
+
 ## Option 1: Deploy as a Stack (Git build)
 
 1. **On your machine:** Build and push an image (if you use a registry), or use Portainer’s Git build.
@@ -45,14 +72,14 @@ These values are **server-only** (no `NEXT_PUBLIC_`), so they are not embedded i
 2. **In Portainer:**  
    - **Stacks** → **Add stack**  
    - Name: e.g. `neu-money-tracking`  
-   - Build method: **Web editor** (paste `docker-compose.yml`) or **Git repository**  
+   - Build method: **Git repository** (recommended) or **Web editor**  
    - If using Web editor, paste the compose file and set env vars as above.
 
-3. **Set environment variables** (see “Where to put PocketBase admin credentials” above).
+3. **Set environment variables** in the stack’s Env section (see “Deploy from Git” above). Never commit real values.
 
 4. **Build and deploy:**  
    - With **Web editor** + pre-built image: remove `build: .` and deploy.  
-   - With **Git repository**: set repo URL and compose path so Portainer can build.
+   - With **Git repository**: set repo URL and compose path; Portainer builds and injects env vars at deploy.
 
 5. With Traefik, the app is reached at your configured hostname. Without Traefik, use `http://your-server:3002`.
 

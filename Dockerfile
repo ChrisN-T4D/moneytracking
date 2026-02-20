@@ -1,10 +1,11 @@
-# Build stage
+# Build stage — install all dependencies (including unpdf for statement upload) from lockfile
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm ci
+# Require lockfile so npm ci installs exact versions and all deps (avoids missing modules at build/runtime)
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
 
 COPY . .
 RUN npm run build

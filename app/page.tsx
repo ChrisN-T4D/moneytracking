@@ -33,7 +33,8 @@ import {
   getStatementTagRules,
   getGoals,
 } from "@/lib/pocketbase";
-import type { BillListAccount, BillListType, Section } from "@/lib/types";
+import type { BillListAccount, BillListType, Section, Summary, SpanishForkBill, AutoTransfer, MoneyGoal } from "@/lib/types";
+import type { BillOrSubWithMeta } from "@/lib/pocketbase";
 import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule } from "@/lib/statementTagging";
 import { getPaycheckDepositsThisMonth } from "@/lib/statementsAnalysis";
 import {
@@ -72,7 +73,7 @@ const DEFAULT_SECTIONS: Section[] = [
   { id: "default-2", sortOrder: 2, type: "bills_list", title: "Bills (Checking Account)", subtitle: "Checking bills", account: "checking_account", listType: "bills" },
   { id: "default-3", sortOrder: 3, type: "bills_list", title: "Subscriptions (Checking Account)", subtitle: "", account: "checking_account", listType: "subscriptions" },
   { id: "default-4", sortOrder: 4, type: "spanish_fork", title: "Spanish Fork (Rental)", subtitle: "Bills with tenant paid amounts", account: null, listType: null },
-  { id: "default-5", sortOrder: 5, type: "auto_transfers", title: "Auto transfers", subtitle: "What for, frequency, account, date, amount", account: null, listType: null },
+  { id: "default-5", sortOrder: 5, type: "auto_transfers", title: "Auto transfers", subtitle: "Money moved between accounts to cover what we need (e.g. to Bills account, Spanish Fork account). Fun money isn't tracked here.", account: null, listType: null },
 ];
 
 /** Resolve next due and in-this-paycheck for static bill lists so dates advance by frequency. */
@@ -218,7 +219,7 @@ export default async function Home() {
   const paycheckPaidThisMonth = fromStatements + fromAddedPaychecks;
 
   // Current money status: predicted need by account + auto transfers + paychecks
-  const predictedNeed = hasPb
+  const predictedNeedRaw = hasPb
     ? predictedNeedByAccountFromPb(billsWithMeta, spanishForkPb)
     : predictedNeedByAccountFromLists(
         resolvedBillsAccountBills,
@@ -227,11 +228,20 @@ export default async function Home() {
         resolvedCheckingAccountSubs,
         resolvedSpanishForkBills
       );
+  // Net Spanish Fork need: our bills minus tenant rent (rent offsets what we need to cover)
+  const tenantRentMonthly = summary.spanishForkTenantRentMonthly ?? 0;
+  const predictedNeed = {
+    ...predictedNeedRaw,
+    spanishFork: Math.max(0, predictedNeedRaw.spanishFork - tenantRentMonthly),
+  };
   const autoTransfersMonthly = autoTransfersMonthlyByAccount(hasPb ? autoTransfersPb : autoTransfers);
-  // Show expected paychecks for NEXT month — money status is forward-looking (planning ahead for next month's bills).
+  // Use CURRENT month for money status and left over (so paid/variable data matches).
+  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const { total: paychecksThisMonthExpected, payDates } = expectedPaychecksThisMonthDetail(paycheckConfigs, nextMonth);
-  const forMonthName = nextMonth.toLocaleString("en-US", { month: "long" });
+  const { total: paychecksCurrentMonth, payDates } = expectedPaychecksThisMonthDetail(paycheckConfigs, currentMonth);
+  const { total: paychecksNextMonth, payDates: payDatesNextMonth } = expectedPaychecksThisMonthDetail(paycheckConfigs, nextMonth);
+  const forMonthName = currentMonth.toLocaleString("en-US", { month: "long" });
+  const nextMonthName = nextMonth.toLocaleString("en-US", { month: "long" });
   const totalGoalContributions = goals.reduce((sum, g) => sum + (g.monthlyContribution ?? 0), 0);
   const accountBalances = {
     checking: summary.checkingBalance ?? null,
@@ -244,13 +254,13 @@ export default async function Home() {
     spanishFork: monthlySpendingBySection.get("spanish_fork|bills") ?? 0,
   };
   const variableExpensesThisMonth = paidThisMonthByBill.get(VARIABLE_EXPENSES_BILL_KEY) ?? 0;
-  const moneyStatus = computeMoneyStatus(predictedNeed, autoTransfersMonthly, paychecksThisMonthExpected, payDates, forMonthName, totalGoalContributions, accountBalances, paidThisMonthByAccount, variableExpensesThisMonth);
+  const moneyStatus = computeMoneyStatus(predictedNeed, autoTransfersMonthly, paychecksCurrentMonth, payDates, forMonthName, totalGoalContributions, accountBalances, paidThisMonthByAccount, variableExpensesThisMonth);
 
   // Groceries & Gas: $250 per paycheck; remaining = 250 - spent in current pay period (biweekly)
   const GROCERIES_AND_GAS_PER_PAYCHECK = 250;
   const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const nextBiweekly = getNextBiweeklyPayDate(paycheckConfigs, today);
-  let groceriesAndGasBudget = GROCERIES_AND_GAS_PER_PAYCHECK;
+  const groceriesAndGasBudget = GROCERIES_AND_GAS_PER_PAYCHECK;
   let groceriesAndGasSpent = 0;
   if (nextBiweekly) {
     const periodEnd = new Date(nextBiweekly.getFullYear(), nextBiweekly.getMonth(), nextBiweekly.getDate());
@@ -278,11 +288,13 @@ export default async function Home() {
       (paidThisMonthByBill.get("checking_account|bills|gas") ?? 0) +
       (paidThisMonthByBill.get("checking_account|bills|groceries & gas") ?? 0);
   }
-  const moneyStatusWithExtras = moneyStatus as import("@/lib/summaryCalculations").MoneyStatus;
+  const moneyStatusWithExtras = moneyStatus as import("@/lib/summaryCalculations").MoneyStatus & { incomeNextMonth?: number; nextMonthName?: string };
   moneyStatusWithExtras.subsections = {
     groceriesAndGas: { budget: groceriesAndGasBudget, spent: groceriesAndGasSpent },
   };
   moneyStatusWithExtras.variableExpensesBreakdown = paidBreakdownByBill.get(VARIABLE_EXPENSES_BILL_KEY) ?? [];
+  moneyStatusWithExtras.incomeNextMonth = paychecksNextMonth;
+  moneyStatusWithExtras.nextMonthName = nextMonthName;
 
   return (
     <AuthenticatedContent>
@@ -309,6 +321,8 @@ export default async function Home() {
           paycheckConfigs={paycheckConfigs}
           moneyStatus={moneyStatusWithExtras}
           paycheckEndDate={biweeklyEnd ?? null}
+          spanishForkGrossNeed={predictedNeedRaw.spanishFork}
+          tenantRentMonthly={summary.spanishForkTenantRentMonthly ?? null}
         />
       </AuthenticatedContent>
   );
@@ -317,9 +331,9 @@ export default async function Home() {
 function MainContent({
   hasPb,
   today,
-  summary,
+  summary: _summary,
   goals,
-  usePb,
+  usePb: _usePb,
   sectionsToRender,
   billsWithMeta,
   spanishForkPb,
@@ -337,22 +351,24 @@ function MainContent({
   paycheckConfigs,
   moneyStatus,
   paycheckEndDate,
+  spanishForkGrossNeed,
+  tenantRentMonthly,
 }: {
   hasPb: boolean;
   today: Date;
-  summary: any;
-  goals: any;
+  summary: Summary | null;
+  goals: MoneyGoal[];
   usePb: boolean;
   sectionsToRender: Section[];
-  billsWithMeta: any;
-  spanishForkPb: any;
-  autoTransfersPb: any;
-  billsAccountBills: any;
-  billsAccountSubs: any;
-  checkingAccountBills: any;
-  checkingAccountSubs: any;
-  spanishForkBills: any;
-  autoTransfers: any;
+  billsWithMeta: BillOrSubWithMeta[];
+  spanishForkPb: SpanishForkBill[];
+  autoTransfersPb: AutoTransfer[];
+  billsAccountBills: BillOrSubWithMeta[];
+  billsAccountSubs: BillOrSubWithMeta[];
+  checkingAccountBills: BillOrSubWithMeta[];
+  checkingAccountSubs: BillOrSubWithMeta[];
+  spanishForkBills: SpanishForkBill[];
+  autoTransfers: AutoTransfer[];
   monthlySpendingBySection: Map<string, number>;
   paidThisMonthByBill: Map<string, number>;
   paidBreakdownByBill: Map<string, import("@/lib/statementTagging").ActualBreakdownItem[]>;
@@ -360,6 +376,8 @@ function MainContent({
   paycheckConfigs: Awaited<ReturnType<typeof getPaychecks>>;
   moneyStatus: import("@/lib/summaryCalculations").MoneyStatus;
   paycheckEndDate: Date | null;
+  spanishForkGrossNeed: number;
+  tenantRentMonthly: number | null;
 }) {
   return (
     <main className="min-h-screen pb-safe relative">
@@ -487,6 +505,9 @@ function MainContent({
                     breakdownByName={sfBreakdownByName}
                     editableTenantPaid
                     canDelete
+                    tenantRentMonthly={tenantRentMonthly}
+                    spanishForkGrossNeed={spanishForkGrossNeed}
+                    canEditTenantRent
                   />
                 );
               }
@@ -581,6 +602,8 @@ function MainContent({
                   .map(([k, v]) => [k.slice("spanish_fork|bills|".length), v])
               )}
               editableTenantPaid={false}
+              tenantRentMonthly={tenantRentMonthly}
+              spanishForkGrossNeed={spanishForkGrossNeed}
             />
             <AutoTransfersSection transfers={autoTransfers} />
           </>

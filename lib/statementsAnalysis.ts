@@ -250,10 +250,12 @@ export function billNameFromDescription(description: string): string {
   if (/\bProg\s*Preferred|Progressive/i.test(s)) return "Progressive Insurance";
   if (/\bThe\s*Ridge\s*at\s*Spa/i.test(s)) return "The Ridge at Spa";
   if (/\bOG\s*&\s*E|OG&E/i.test(s)) return "OG&E (Electricity)";
-  // Walmart: explicit name or bank format "Store# City ST" (e.g. "#4390 Enid OK")
-  if (/\bWalmart|Wal-Mart|Wal Mart/i.test(s)) return "Walmart";
-  if (/^#?\s*\d{4,5}\s+[A-Za-z]+\s+[A-Z]{2}$/.test(s)) return "Walmart";
-  if (/\bWM\s*#|WAL\s*MART\s*#/i.test(s)) return "Walmart";
+  // Walmart Plus (subscription) vs Walmart store (groceries & gas)
+  if (/\bwalmart\s*plus|way2save.*walmart\s*plus/i.test(s)) return "Walmart Plus";
+  // Walmart store: explicit name or bank format "Store# City ST" (e.g. "#4390 Enid OK") → Groceries & Gas
+  if (/\bWalmart|Wal-Mart|Wal Mart/i.test(s)) return "Groceries & Gas";
+  if (/^#?\s*\d{4,5}\s+[A-Za-z]+\s+[A-Z]{2}$/.test(s)) return "Groceries & Gas";
+  if (/\bWM\s*#|WAL\s*MART\s*#/i.test(s)) return "Groceries & Gas";
   if (/\bSpotify/i.test(s)) return "Spotify";
   if (/\bHBO\s*Max|Hbomax/i.test(s)) return "HBO Max";
   if (/\bNetflix/i.test(s)) return "Netflix";

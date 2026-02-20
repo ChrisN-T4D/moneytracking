@@ -43,7 +43,7 @@ const ACCOUNT_OPTIONS = [
   { value: "Checking", label: "Checking" },
 ];
 
-export function AutoTransfersSection({ transfers, title = "Auto transfers", subtitle = "What for, frequency, account, date, amount" }: AutoTransfersSectionProps) {
+export function AutoTransfersSection({ transfers, title = "Auto transfers", subtitle = "Money moved between accounts to cover what we need (e.g. to Bills account, Spanish Fork account). Fun money goes to individual accounts and isn't tracked here." }: AutoTransfersSectionProps) {
   const { theme } = useTheme();
   const router = useRouter();
   const [addOpen, setAddOpen] = useState(false);

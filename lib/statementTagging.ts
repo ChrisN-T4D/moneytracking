@@ -94,25 +94,45 @@ export function matchRule(
   const pat = makeStatementPattern(statement.description);
   const norm = billNameFromDescription(statement.description);
 
-  // Try exact pattern match first (HIGH confidence)
-  const exactMatch = rules.find((r) => r.pattern.toUpperCase() === pat);
-  if (exactMatch) {
-    const confidence = calculateConfidence(exactMatch);
-    return { rule: exactMatch, confidence, matchType: "exact_pattern" };
-  }
-
-  // Try normalized description match (MEDIUM confidence)
-  const normalizedMatch = rules.find(
+  const exactMatches = rules.filter((r) => r.pattern.toUpperCase() === pat);
+  const normalizedMatches = rules.filter(
     (r) =>
       r.normalizedDescription &&
       r.normalizedDescription.toLowerCase() === norm.toLowerCase()
   );
-  if (normalizedMatch) {
-    const confidence = calculateConfidence(normalizedMatch);
-    return { rule: normalizedMatch, confidence, matchType: "normalized_description" };
+
+  // Prefer manual override over rule-of-thumb: among all matches, pick the one the user has explicitly used (overrideCount > 0)
+  type Candidate = { rule: StatementTagRule; matchType: "exact_pattern" | "normalized_description" };
+  const raw: Candidate[] = [
+    ...exactMatches.map((rule) => ({ rule, matchType: "exact_pattern" as const })),
+    ...normalizedMatches.map((rule) => ({ rule, matchType: "normalized_description" as const })),
+  ];
+  const seen = new Set<string>();
+  const unique: Candidate[] = [];
+  for (const c of raw) {
+    if (seen.has(c.rule.id)) continue;
+    seen.add(c.rule.id);
+    unique.push(c);
   }
 
-  return null;
+  if (unique.length === 0) return null;
+
+  // Sort: manual override (overrideCount > 0) first, then exact before normalized, then by confidence
+  const overrideCount = (r: StatementTagRule) => r.overrideCount ?? 0;
+  const score = (c: Candidate) => {
+    const conf = calculateConfidence(c.rule);
+    const confOrder = conf === "HIGH" ? 3 : conf === "MEDIUM" ? 2 : 1;
+    return [
+      overrideCount(c.rule) > 0 ? 1 : 0,
+      c.matchType === "exact_pattern" ? 1 : 0,
+      confOrder,
+    ].join(",");
+  };
+  unique.sort((a, b) => (score(b).localeCompare(score(a))));
+
+  const chosen = unique[0]!;
+  const confidence = calculateConfidence(chosen.rule);
+  return { rule: chosen.rule, confidence, matchType: chosen.matchType };
 }
 
 /** Calculate confidence level based on rule usage statistics. */
@@ -145,11 +165,9 @@ export function suggestTagsForStatements(
     const heuristicName = billNameFromDescription(s.description);
     const matched = matchRule(rules, s);
     if (matched) {
-      // If description matches known Walmart store format (#4390 Enid OK), prefer Walmart over any rule that suggested something else
+      // Use the rule's target name (e.g. user set "Groceries & Gas"); never override back to heuristic like "Walmart"
       const targetName =
-        heuristicName === "Walmart"
-          ? "Walmart"
-          : (matched.rule.targetName ?? matched.rule.normalizedDescription ?? heuristicName);
+        matched.rule.targetName ?? matched.rule.normalizedDescription ?? heuristicName;
       return {
         statement: s,
         targetType: matched.rule.targetType,

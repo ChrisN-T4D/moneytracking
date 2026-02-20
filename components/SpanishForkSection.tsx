@@ -25,6 +25,12 @@ interface SpanishForkSectionProps {
   editableTenantPaid?: boolean;
   /** When true, show delete button per row (for PocketBase-backed list). */
   canDelete?: boolean;
+  /** Monthly rent from tenants (offsets bills in "what we need"). Shown under section title. */
+  tenantRentMonthly?: number | null;
+  /** Total Spanish Fork bills (monthly equivalent) before subtracting rent. */
+  spanishForkGrossNeed?: number;
+  /** When true, tenant rent is editable and saved to summary. */
+  canEditTenantRent?: boolean;
 }
 
 const FREQ_BADGE_BASE = "inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold tabular-nums";
@@ -51,9 +57,13 @@ interface EditState {
   error: string | null;
 }
 
-export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork (Rental)", subtitle = "Bills with tenant paid amounts", paidThisMonth, paidByName = {}, breakdownByName = {}, editableTenantPaid = true, canDelete = false }: SpanishForkSectionProps) {
+export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork (Rental)", subtitle = "Bills with tenant paid amounts", paidThisMonth, paidByName = {}, breakdownByName = {}, editableTenantPaid = true, canDelete = false, tenantRentMonthly, spanishForkGrossNeed, canEditTenantRent = false }: SpanishForkSectionProps) {
   const { theme } = useTheme();
   const router = useRouter();
+  const [tenantRentEdit, setTenantRentEdit] = useState<string | null>(null);
+  const [tenantRentSaving, setTenantRentSaving] = useState(false);
+  const [tenantRentError, setTenantRentError] = useState<string | null>(null);
+  const tenantRentInputRef = useRef<HTMLInputElement>(null);
 
   function getBreakdownFor(name: string): ActualBreakdownItem[] | undefined {
     const exact = breakdownByName[name];
@@ -205,6 +215,32 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
     }
   }, [edit]);
 
+  const netNeed = spanishForkGrossNeed != null && tenantRentMonthly != null
+    ? Math.max(0, spanishForkGrossNeed - tenantRentMonthly)
+    : null;
+
+  async function saveTenantRent(value: number | null) {
+    setTenantRentSaving(true);
+    setTenantRentError(null);
+    try {
+      const res = await fetch("/api/summary", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spanishForkTenantRentMonthly: value }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { message?: string }).message ?? "Save failed");
+      }
+      setTenantRentEdit(null);
+      router.refresh();
+    } catch (e) {
+      setTenantRentError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setTenantRentSaving(false);
+    }
+  }
+
   return (
     <section className={getCardClasses(theme.spanishFork)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -215,6 +251,65 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
             {subtitle}
           </p>
+          {/* Tenant rent: we pay internet/cable; mortgage & Advantage we pay but rent should cover; utilities/HOA/gas charged to tenants */}
+          {(tenantRentMonthly != null || spanishForkGrossNeed != null || canEditTenantRent) && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-neutral-600 dark:text-neutral-400">
+              {tenantRentEdit === "rent" ? (
+                <span className="flex items-center gap-1.5">
+                  <span>Tenants pay (rent):</span>
+                  <input
+                    ref={tenantRentInputRef}
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    placeholder="0"
+                    defaultValue={tenantRentMonthly ?? ""}
+                    className="w-24 rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-0.5 text-neutral-900 dark:text-neutral-100"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const v = (e.target as HTMLInputElement).value.trim();
+                        saveTenantRent(v === "" ? null : Number(v));
+                      }
+                      if (e.key === "Escape") setTenantRentEdit(null);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const v = tenantRentInputRef.current?.value.trim();
+                      saveTenantRent(v === "" ? null : Number(v));
+                    }}
+                    disabled={tenantRentSaving}
+                    className="text-sky-600 dark:text-sky-400 font-medium disabled:opacity-50"
+                  >
+                    {tenantRentSaving ? "Saving…" : "Save"}
+                  </button>
+                  <button type="button" onClick={() => setTenantRentEdit(null)} className="text-neutral-500">Cancel</button>
+                </span>
+              ) : (
+                <>
+                  <span>
+                    Tenants pay: {tenantRentMonthly != null ? formatCurrency(tenantRentMonthly) : "—"} / month (rent)
+                    {canEditTenantRent && (
+                      <button type="button" onClick={() => setTenantRentEdit("rent")} className="ml-1 text-sky-600 dark:text-sky-400 hover:underline" aria-label="Edit tenant rent">Edit</button>
+                    )}
+                  </span>
+                  {spanishForkGrossNeed != null && (
+                    <span>
+                      Total bills: {formatCurrency(spanishForkGrossNeed)}/mo
+                      {netNeed !== null && (
+                        <> · Net we need: {formatCurrency(netNeed)}/mo</>
+                      )}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {tenantRentError && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400" role="alert">{tenantRentError}</p>
+          )}
         </div>
         {(paidThisMonth !== undefined || budgetedTotal > 0) && (
           <div className="text-right">
