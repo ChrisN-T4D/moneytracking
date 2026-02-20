@@ -88,15 +88,52 @@ export async function POST(request: Request) {
 
   if (rows.length === 0) {
     return NextResponse.json(
-      { ok: false, message: "No rows parsed. For CSV: ensure a header row and columns (date, description, amount). For PDF: ensure lines start with a date (e.g. MM/DD/YYYY) and include an amount." },
+      {
+        ok: false,
+        message:
+          "No rows parsed. CSV: use a header row with Date, Description, Amount (or Debit/Credit), or use Wells Fargo activity export format (no header: Date, Amount, *, empty, Description). PDF: ensure lines have date and amount.",
+      },
       { status: 400 }
     );
   }
 
+  // Build set of existing statement keys (date|description|amount) to skip duplicates
+  const existingKeys = new Set<string>();
+  let page = 1;
+  const perPage = 500;
+  let hasMore = true;
+  while (hasMore) {
+    const listRes = await fetch(
+      `${base}/api/collections/statements/records?perPage=${perPage}&page=${page}&sort=-date`,
+      { cache: "no-store" }
+    );
+    if (!listRes.ok) break;
+    const listData = (await listRes.json()) as {
+      items?: Array<{ date?: string; description?: string; amount?: number }>;
+      totalPages?: number;
+    };
+    const items = listData.items ?? [];
+    for (const s of items) {
+      const d = (s.date ?? "").trim();
+      const desc = (s.description ?? "").trim();
+      const amt = typeof s.amount === "number" ? s.amount : 0;
+      existingKeys.add(`${d}|${desc}|${amt}`);
+    }
+    const totalPages = listData.totalPages ?? 1;
+    hasMore = page < totalPages;
+    page++;
+  }
+
   let imported = 0;
+  let skipped = 0;
   const errors: string[] = [];
   let firstPocketBaseError: string | null = null;
   for (const row of rows) {
+    const key = `${(row.date ?? "").trim()}|${(row.description ?? "").trim()}|${row.amount}`;
+    if (existingKeys.has(key)) {
+      skipped++;
+      continue;
+    }
     try {
       const res = await fetch(`${base}/api/collections/statements/records`, {
         method: "POST",
@@ -113,6 +150,7 @@ export async function POST(request: Request) {
       });
       if (res.ok) {
         imported++;
+        existingKeys.add(key);
       } else {
         const errBody = await res.text();
         const errMsg = (() => {
@@ -137,17 +175,18 @@ export async function POST(request: Request) {
   }
 
   const message =
-    imported === rows.length
-      ? `Imported ${imported} of ${rows.length} rows.`
+    imported + skipped === rows.length
+      ? `Imported ${imported} of ${rows.length} rows.${skipped > 0 ? ` ${skipped} duplicates skipped.` : ""}`
       : firstPocketBaseError
         ? `Imported ${imported} of ${rows.length} rows. PocketBase rejected the rest. First error: ${firstPocketBaseError}`
-        : `Imported ${imported} of ${rows.length} rows.`;
+        : `Imported ${imported} of ${rows.length} rows.${skipped > 0 ? ` ${skipped} duplicates skipped.` : ""}`;
 
   return NextResponse.json({
     ok: true,
     message,
     imported,
     total: rows.length,
+    skipped,
     errors: errors.length > 0 ? errors.slice(0, 20) : undefined,
   });
 }

@@ -209,7 +209,7 @@ export async function POST(request: Request) {
             nextDue,
             inThisPaycheck: false,
             amount: s.amount,
-            tenantPaid: null,
+            tenantPaid: false,
           };
           const res = await fetch(`${apiBase}/api/collections/spanish_fork_bills/records`, {
             method: "POST",

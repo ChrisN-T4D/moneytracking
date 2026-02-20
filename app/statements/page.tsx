@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { StatementTagTargetType } from "@/lib/types";
+import { displayBillName } from "@/lib/format";
 
 interface SuggestedPaycheck {
   name: string;
@@ -47,6 +49,7 @@ interface TagSuggestion {
 }
 
 export default function StatementsPage() {
+  const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [account, setAccount] = useState("");
@@ -112,6 +115,52 @@ export default function StatementsPage() {
   };
   const [applying, setApplying] = useState(false);
 
+  const [deleteAllStatus, setDeleteAllStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [deleteAllMessage, setDeleteAllMessage] = useState("");
+  const [resetTagsStatus, setResetTagsStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [resetTagsMessage, setResetTagsMessage] = useState("");
+
+  async function handleResetTags() {
+    if (!confirm("Reset all tags? This will delete all categorization rules. You can re-categorize from \"Add items to bills\" on the main page. Continue?")) return;
+    setResetTagsStatus("loading");
+    setResetTagsMessage("");
+    try {
+      const res = await fetch("/api/statement-tags/reset", { method: "DELETE", credentials: "include" });
+      const data = (await res.json()) as { ok?: boolean; deleted?: number; message?: string };
+      if (res.ok && data.ok) {
+        setResetTagsStatus("success");
+        setResetTagsMessage(data.message ?? `Reset complete. Deleted ${data.deleted ?? 0} tag rule(s).`);
+        router.refresh();
+      } else {
+        setResetTagsStatus("error");
+        setResetTagsMessage(data.message ?? "Reset failed.");
+      }
+    } catch (err) {
+      setResetTagsStatus("error");
+      setResetTagsMessage(err instanceof Error ? err.message : "Reset failed.");
+    }
+  }
+
+  async function handleDeleteAll() {
+    if (!confirm("Delete all rows in the statements collection? This cannot be undone.")) return;
+    setDeleteAllStatus("loading");
+    setDeleteAllMessage("");
+    try {
+      const res = await fetch("/api/statements/delete-all", { method: "DELETE", credentials: "include" });
+      const data = (await res.json()) as { ok?: boolean; deleted?: number; message?: string };
+      if (res.ok && data.ok) {
+        setDeleteAllStatus("success");
+        setDeleteAllMessage(data.message ?? `Deleted ${data.deleted ?? 0} statement(s).`);
+      } else {
+        setDeleteAllStatus("error");
+        setDeleteAllMessage(data.message ?? "Delete failed.");
+      }
+    } catch (err) {
+      setDeleteAllStatus("error");
+      setDeleteAllMessage(err instanceof Error ? err.message : "Delete failed.");
+    }
+  }
+
   // When opened from hamburger "Add paychecks from statements", scroll to this section
   useEffect(() => {
     if (typeof window !== "undefined" && window.location.hash === "#fill-from-statements") {
@@ -131,18 +180,17 @@ export default function StatementsPage() {
     return targetType === "subscription" ? "checking_account_subscriptions" : "checking_account_bills";
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function runImport(): Promise<boolean> {
     if (files.length === 0) {
       setStatus("error");
       setMessage("Choose at least one CSV or PDF file.");
-      return;
+      return false;
     }
     setStatus("loading");
     setMessage("");
     setResult(null);
     const accountVal = account.trim();
-    const results: Array<{ file: string; ok: boolean; imported: number; total: number; message?: string }> = [];
+    const results: Array<{ file: string; ok: boolean; imported: number; total: number; skipped?: number; message?: string }> = [];
     let totalImported = 0;
     try {
       for (const file of files) {
@@ -156,11 +204,13 @@ export default function StatementsPage() {
         const data = (await res.json()) as Record<string, unknown>;
         const imported = typeof data.imported === "number" ? data.imported : 0;
         const total = typeof data.total === "number" ? data.total : 0;
+        const skipped = typeof data.skipped === "number" ? data.skipped : 0;
         results.push({
           file: file.name,
           ok: res.ok,
           imported,
           total,
+          skipped: skipped > 0 ? skipped : undefined,
           message: typeof data.message === "string" ? data.message : undefined,
         });
         if (res.ok) totalImported += imported;
@@ -169,21 +219,42 @@ export default function StatementsPage() {
       if (failed.length > 0) {
         setStatus("error");
         setMessage(failed.length === results.length ? (failed[0].message ?? "Upload failed.") : `Some files failed. ${totalImported} rows imported from successful files.`);
-      } else {
-        setStatus("success");
-        setMessage(
-          results.length === 1
-            ? `Imported ${totalImported} of ${results[0].total} rows from ${results[0].file}.`
-            : `Imported ${totalImported} rows from ${results.length} files.`
-        );
+        setResult({ results, totalImported });
+        setFiles([]);
+        setFileInputKey((k) => k + 1);
+        return false;
       }
+      setStatus("success");
+      const totalSkipped = results.reduce((s, r) => s + (r.skipped ?? 0), 0);
+      setMessage(
+        results.length === 1
+          ? `Imported ${totalImported} of ${results[0].total} rows from ${results[0].file}.${totalSkipped > 0 ? ` ${totalSkipped} duplicates skipped.` : ""}`
+          : `Imported ${totalImported} rows from ${results.length} files.${totalSkipped > 0 ? ` ${totalSkipped} duplicates skipped.` : ""}`
+      );
       setResult({ results, totalImported });
       setFiles([]);
       setFileInputKey((k) => k + 1);
+      return true;
     } catch (err) {
       setStatus("error");
       setMessage(err instanceof Error ? err.message : "Upload failed.");
+      return false;
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await runImport();
+  }
+
+  /** Import selected files (with duplicate check) then run analyze. If no files selected, just analyze. */
+  async function handleImportAndAnalyze(e: React.FormEvent) {
+    e.preventDefault();
+    if (files.length > 0) {
+      const ok = await runImport();
+      if (!ok) return;
+    }
+    await handleAnalyze();
   }
 
   async function handleAnalyze() {
@@ -322,6 +393,7 @@ export default function StatementsPage() {
       // Optionally clear suggestions so you only see remaining next time.
       setTagSuggestions([]);
       setTagEdits({});
+      router.refresh(); // Re-fetch so main page "paid this month" updates
     } catch (err) {
       setTagStatus("error");
       setTagMessage(err instanceof Error ? err.message : "Saving tags failed.");
@@ -452,7 +524,7 @@ export default function StatementsPage() {
           </p>
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
             <strong>PDF:</strong> Tailored for Wells Fargo combined-statement PDFs. We use the “Transaction history” section, M/D dates, and first amount per line (deposits positive, withdrawals negative). Description is the payee/merchant name where we can detect it.<br />
-            <strong>CSV:</strong> First row = headers (Date, Description or Memo/Payee, Amount; optional Balance, Category; or Debit/Credit columns).
+            <strong>CSV:</strong> First row = headers (Date, Description or Memo/Payee, Amount; optional Balance, Category; or Debit/Credit columns). Wells Fargo &quot;Download activity&quot; CSV (no header: Date, Amount, *, blank, Description) is auto-detected for full history import.
           </p>
           <div className="mt-2 space-y-2">
             <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
@@ -540,7 +612,10 @@ export default function StatementsPage() {
                           <div className="flex-shrink-0 text-[10px] text-neutral-500 dark:text-neutral-400 w-16">
                             {row.date.slice(5)}
                           </div>
-                          <div className="flex-1 min-w-[120px] text-[11px] text-neutral-800 dark:text-neutral-200 truncate">
+                          <div
+                            className="flex-1 min-w-[120px] max-w-[400px] text-[11px] text-neutral-800 dark:text-neutral-200 line-clamp-3 break-words"
+                            title={row.description}
+                          >
                             {row.description}
                           </div>
                           <div className="flex-shrink-0 text-[11px] font-medium text-right tabular-nums text-neutral-700 dark:text-neutral-300 w-16">
@@ -604,21 +679,22 @@ export default function StatementsPage() {
                                   }
                                 >
                                   {(() => {
-                                    const fromBillNames = Array.from(
-                                      new Set(Object.values(billNames).flat() as string[])
-                                    );
+                                    const groupKey =
+                                      sect === "spanish_fork"
+                                        ? "spanish_fork"
+                                        : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
+                                    const namesForAccount = billNames[groupKey] ?? [];
                                     const typeSubsections =
                                       type === "subscription"
                                         ? subsections.subscriptions
                                         : subsections.bills;
-                                    const combined = Array.from(
-                                      new Set([...fromBillNames, ...typeSubsections])
-                                    );
-                                    const options =
-                                      combined.length > 0 ? combined : [edit.targetName];
-                                    return options.map((name) => (
+                                    const options = namesForAccount.length > 0 ? namesForAccount : typeSubsections;
+                                    const withCurrent = options.includes(edit.targetName)
+                                      ? options
+                                      : [edit.targetName, ...options];
+                                    return withCurrent.map((name) => (
                                       <option key={name} value={name}>
-                                        {name}
+                                        {displayBillName(name)}
                                       </option>
                                     ));
                                   })()}
@@ -648,7 +724,7 @@ export default function StatementsPage() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleImportAndAnalyze} className="space-y-4">
           <div>
             <label htmlFor="file" className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
               CSV or PDF file(s) — select one or many
@@ -683,11 +759,53 @@ export default function StatementsPage() {
           </div>
           <button
             type="submit"
-            disabled={status === "loading" || files.length === 0}
+            disabled={status === "loading" || fillStatus === "loading"}
             className="w-full rounded-lg bg-neutral-800 dark:bg-neutral-200 text-white dark:text-neutral-900 px-4 py-2.5 text-sm font-medium hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
           >
-            {status === "loading" ? "Uploading…" : files.length > 1 ? `Upload ${files.length} files` : "Upload"}
+            {status === "loading" ? "Uploading…" : fillStatus === "loading" ? "Analyzing…" : "Import and analyze"}
           </button>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            Imports CSV/PDF (duplicates skipped), then analyzes statements to suggest paychecks and bills. With no files selected, only analyzes existing statements.
+          </p>
+          <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700 space-y-2">
+            <button
+              type="button"
+              onClick={handleResetTags}
+              disabled={resetTagsStatus === "loading"}
+              className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 px-4 py-2 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50"
+            >
+              {resetTagsStatus === "loading" ? "Resetting…" : "Reset all tags"}
+            </button>
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+              Clears all categorization rules (e.g. Dog Grooming, Walmart). Use &quot;Add items to bills&quot; on the main page to re-tag from scratch.
+            </p>
+            {resetTagsMessage && (
+              <p
+                className={`text-xs ${
+                  resetTagsStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"
+                }`}
+              >
+                {resetTagsMessage}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={handleDeleteAll}
+              disabled={deleteAllStatus === "loading"}
+              className="w-full rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 px-4 py-2 text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/50 disabled:opacity-50"
+            >
+              {deleteAllStatus === "loading" ? "Deleting…" : "Delete all statements"}
+            </button>
+            {deleteAllMessage && (
+              <p
+                className={`text-xs ${
+                  deleteAllStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"
+                }`}
+              >
+                {deleteAllMessage}
+              </p>
+            )}
+          </div>
         </form>
 
         {status === "success" && (
@@ -717,6 +835,9 @@ export default function StatementsPage() {
           <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 mb-2">
             Fill main page from statements
           </p>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-1">
+            Use <strong>Import and analyze</strong> above to upload then analyze, or use the button below to analyze existing statements only.
+          </p>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-3">
             Use your imported statements to suggest <strong>expected paychecks</strong> (from deposits like Gusto Payroll, Direct Deposit) and <strong>auto-transfers</strong> (recurring transfers to/from Way2Save). Select or deselect paychecks and bills before adding—only selected items are added. Bills show average cost from statements. If you see “0 statements” but you’ve imported data, set <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">POCKETBASE_ADMIN_EMAIL</code> and <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">POCKETBASE_ADMIN_PASSWORD</code> in <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">.env.local</code> so the app can read statements when the List rule is restricted.
           </p>
@@ -724,9 +845,9 @@ export default function StatementsPage() {
             type="button"
             onClick={handleAnalyze}
             disabled={fillStatus === "loading"}
-            className="w-full rounded-lg bg-neutral-700 dark:bg-neutral-300 text-white dark:text-neutral-900 px-4 py-2.5 text-sm font-medium hover:bg-neutral-600 dark:hover:bg-neutral-200 disabled:opacity-50"
+            className="w-full rounded-lg bg-neutral-600 dark:bg-neutral-400 text-white dark:text-neutral-900 px-4 py-2 text-sm font-medium hover:bg-neutral-500 dark:hover:bg-neutral-300 disabled:opacity-50"
           >
-            {fillStatus === "loading" ? "Analyzing…" : "Analyze statements"}
+            {fillStatus === "loading" ? "Analyzing…" : "Analyze only (no new upload)"}
           </button>
           {fillStatus === "success" && fillMessage && (
             <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-300">{fillMessage}</p>

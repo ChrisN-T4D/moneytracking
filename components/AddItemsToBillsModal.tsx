@@ -2,7 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import type { StatementTagTargetType } from "@/lib/types";
+import { displayBillName } from "@/lib/format";
+import { makeStatementPattern } from "@/lib/statementTagging";
 
 const BATCH_SIZE = 10;
 
@@ -34,6 +37,7 @@ interface AddItemsToBillsModalProps {
 }
 
 export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItemsToBillsModalProps = {}) {
+  const router = useRouter();
   const [internalOpen, setInternalOpen] = useState(false);
   const isControlled = controlledOpen !== undefined && onClose !== undefined;
   const open = isControlled ? controlledOpen : internalOpen;
@@ -45,17 +49,75 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [tagStatus, setTagStatus] = useState<"idle" | "loading" | "saving" | "success" | "error">("idle");
   const [tagMessage, setTagMessage] = useState("");
+  const [resetTagsStatus, setResetTagsStatus] = useState<"idle" | "loading" | "error">("idle");
   const [subsections, setSubsections] = useState<{ bills: string[]; subscriptions: string[] }>({ bills: [], subscriptions: [] });
   const [billNames, setBillNames] = useState<Record<string, string[]>>({});
   const [goals, setGoals] = useState<Goal[]>([]);
+  /** Row ID currently adding a new subsection (shows input instead of dropdown). */
+  const [addingSubsectionForRowId, setAddingSubsectionForRowId] = useState<string | null>(null);
+  /** New subsection name being typed. */
+  const [newSubsectionName, setNewSubsectionName] = useState("");
+  /** Subsections added this session so they appear in the dropdown for that account. */
+  const [customSubsectionsByGroup, setCustomSubsectionsByGroup] = useState<Record<string, string[]>>({});
+
+  // Apply session-based suggestions: use tags the user has set so far to guess tags for other rows with the same pattern.
+  // Only update state when we actually add new keys so we don't cause an infinite loop (setTagEdits → tagEdits change → effect re-runs).
+  useEffect(() => {
+    if (tagSuggestions.length === 0) return;
+    setTagEdits((prev) => {
+      const sessionPatternToTag: Record<
+        string,
+        { targetType: StatementTagTargetType; targetSection: "bills_account" | "checking_account" | "spanish_fork" | null; targetName: string; goalId?: string | null }
+      > = {};
+      for (const row of tagSuggestions) {
+        const edit = prev[row.id];
+        if (!edit?.targetType || edit.targetSection == null || !edit.targetName?.trim()) continue;
+        const pattern = makeStatementPattern(row.description);
+        if (!pattern) continue;
+        sessionPatternToTag[pattern] = {
+          targetType: edit.targetType,
+          targetSection: edit.targetSection,
+          targetName: edit.targetName.trim(),
+          goalId: edit.goalId ?? null,
+        };
+      }
+      const next = { ...prev };
+      let didChange = false;
+      for (const row of tagSuggestions) {
+        if (prev[row.id] !== undefined) continue;
+        const pattern = makeStatementPattern(row.description);
+        const session = pattern ? sessionPatternToTag[pattern] : undefined;
+        if (!session) continue;
+        next[row.id] = {
+          ...row.suggestion,
+          targetType: session.targetType,
+          targetSection: session.targetSection,
+          targetName: session.targetName,
+          goalId: session.goalId ?? null,
+        };
+        didChange = true;
+      }
+      return didChange ? next : prev;
+    });
+  }, [tagSuggestions]);
 
   async function loadTagSuggestions() {
     setTagStatus("loading");
     setTagMessage("Loading…");
     setSavedIds(new Set());
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
     try {
-      const res = await fetch("/api/statement-tags");
-      const data = (await res.json()) as { ok?: boolean; items?: TagSuggestion[]; message?: string; subsections?: { bills?: string[]; subscriptions?: string[] }; billNames?: Record<string, string[]>; goals?: Goal[] };
+      const res = await fetch("/api/statement-tags", { signal: controller.signal });
+      clearTimeout(timeoutId);
+      let data: { ok?: boolean; items?: TagSuggestion[]; message?: string; subsections?: { bills?: string[]; subscriptions?: string[] }; billNames?: Record<string, string[]>; goals?: Goal[] };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        setTagStatus("error");
+        setTagMessage(`Server returned non-JSON (${res.status}). Is the dev server running? Try: npm run dev`);
+        return;
+      }
       if (!res.ok || data.ok === false) {
         setTagStatus("error");
         setTagMessage(data.message ?? `Load failed (${res.status}).`);
@@ -101,8 +163,19 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         setTagMessage(`Loaded ${items.length} rows. All need manual review. Save in batches of ${BATCH_SIZE}.`);
       }
     } catch (err) {
+      clearTimeout(timeoutId);
       setTagStatus("error");
-      setTagMessage(err instanceof Error ? err.message : "Load failed.");
+      if (err instanceof Error) {
+        if (err.name === "AbortError") {
+          setTagMessage("Request timed out. Check that PocketBase and the dev server are running.");
+        } else if (err.message === "Failed to fetch" || err.message.includes("NetworkError")) {
+          setTagMessage("Cannot reach the server. Start the app with: npm run dev (port 3001).");
+        } else {
+          setTagMessage(err.message);
+        }
+      } else {
+        setTagMessage("Load failed.");
+      }
     }
   }
 
@@ -113,6 +186,19 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       setTagMessage("No unsaved rows.");
       return;
     }
+    await runSaveBatch(toSave);
+  }
+
+  /** Save the currently displayed rows (new tags and any changed tags; updates rules so old tag is replaced by new). */
+  async function saveVisibleBatch() {
+    if (visibleRows.length === 0) {
+      setTagMessage("No rows on this page.");
+      return;
+    }
+    await runSaveBatch(visibleRows);
+  }
+
+  async function runSaveBatch(toSave: typeof tagSuggestions) {
     setTagStatus("saving");
     setTagMessage("");
     try {
@@ -120,13 +206,14 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         const edit = tagEdits[t.id] ?? t.suggestion;
         const wasAutoTagged = edit.wasAutoTagged ?? false;
         const originalSuggestion = edit.originalSuggestion;
-        // Check if user changed an auto-tagged suggestion
         const wasOverride = wasAutoTagged && originalSuggestion &&
           (originalSuggestion.targetType !== edit.targetType ||
            originalSuggestion.targetSection !== edit.targetSection ||
            originalSuggestion.targetName !== edit.targetName);
         return {
           statementId: t.id,
+          description: t.description, // sent so server doesn't need to re-fetch
+          amount: t.amount,           // sent so server doesn't need to re-fetch
           targetType: edit.targetType,
           targetSection: edit.targetSection,
           targetName: edit.targetName,
@@ -151,8 +238,25 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         toSave.forEach((t) => next.add(t.id));
         return next;
       });
+      // Populate subsection dropdown for other rows: add saved targetNames to customSubsectionsByGroup
+      setCustomSubsectionsByGroup((prev) => {
+        const next = { ...prev };
+        for (const t of toSave) {
+          const edit = tagEdits[t.id] ?? t.suggestion;
+          if (!edit.targetName || !edit.targetSection) continue;
+          if (edit.targetType !== "bill" && edit.targetType !== "subscription" && edit.targetType !== "spanish_fork") continue;
+          const groupKey =
+            edit.targetSection === "spanish_fork"
+              ? "spanish_fork"
+              : `${edit.targetSection}_${edit.targetType === "subscription" ? "subscriptions" : "bills"}`;
+          const list = next[groupKey] ?? [];
+          if (!list.includes(edit.targetName)) next[groupKey] = [...list, edit.targetName];
+        }
+        return next;
+      });
       setTagStatus("success");
       setTagMessage(data.message ?? `Saved ${toSave.length} tags (${data.rulesCreated ?? 0} rules, ${data.billsUpserted ?? 0} bills).`);
+      router.refresh(); // Re-fetch so Current money status and bills "paid this month" update
     } catch (err) {
       setTagStatus("error");
       setTagMessage(err instanceof Error ? err.message : "Save failed.");
@@ -182,6 +286,8 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
            originalSuggestion.targetName !== edit.targetName);
         return {
           statementId: t.id,
+          description: t.description,
+          amount: t.amount,
           targetType: edit.targetType,
           targetSection: edit.targetSection,
           targetName: edit.targetName,
@@ -205,18 +311,32 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       setSavedIds(new Set(saved));
       totalSaved += batch.length;
       setTagMessage(`Saved ${totalSaved} of ${all.length}…`);
+      // Populate subsection dropdown: add this batch's targetNames to customSubsectionsByGroup
+      setCustomSubsectionsByGroup((prev) => {
+        const next = { ...prev };
+        for (const t of batch) {
+          const edit = tagEdits[t.id] ?? t.suggestion;
+          if (!edit.targetName || !edit.targetSection) continue;
+          if (edit.targetType !== "bill" && edit.targetType !== "subscription" && edit.targetType !== "spanish_fork") continue;
+          const groupKey =
+            edit.targetSection === "spanish_fork"
+              ? "spanish_fork"
+              : `${edit.targetSection}_${edit.targetType === "subscription" ? "subscriptions" : "bills"}`;
+          const list = next[groupKey] ?? [];
+          if (!list.includes(edit.targetName)) next[groupKey] = [...list, edit.targetName];
+        }
+        return next;
+      });
       unsaved = all.filter((row) => !saved.has(row.id));
     }
     setTagStatus("success");
     setTagMessage(`Saved all ${totalSaved} tags.`);
+    router.refresh(); // Re-fetch so Current money status and bills "paid this month" update
   }
 
   const unsavedCount = tagSuggestions.filter((r) => !savedIds.has(r.id)).length;
-  // Only auto-tag HIGH confidence exact pattern matches
-  const autoTaggableCount = tagSuggestions.filter(
-    (r) => !savedIds.has(r.id) && r.suggestion.hasMatchedRule && r.suggestion.confidence === "HIGH"
-  ).length;
-  const manualReviewCount = unsavedCount - autoTaggableCount;
+  // Since we no longer return pre-matched items, autoTaggableCount is always 0
+  const autoTaggableCount = 0;
   const [page, setPage] = useState(0);
   const totalPages = tagSuggestions.length > 0 ? Math.ceil(tagSuggestions.length / BATCH_SIZE) : 1;
   const currentPage = Math.min(page, totalPages - 1);
@@ -240,11 +360,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         const edit = tagEdits[t.id] ?? t.suggestion;
         return {
           statementId: t.id,
+          description: t.description,
+          amount: t.amount,
           targetType: edit.targetType,
           targetSection: edit.targetSection,
           targetName: edit.targetName,
           goalId: edit.goalId ?? null,
-          // Mark as auto-tagged for tracking
           wasAutoTagged: true,
         };
       });
@@ -264,11 +385,54 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         toAutoTag.forEach((t) => next.add(t.id));
         return next;
       });
+      setCustomSubsectionsByGroup((prev) => {
+        const next = { ...prev };
+        for (const t of toAutoTag) {
+          const edit = tagEdits[t.id] ?? t.suggestion;
+          if (!edit.targetName || !edit.targetSection) continue;
+          if (edit.targetType !== "bill" && edit.targetType !== "subscription" && edit.targetType !== "spanish_fork") continue;
+          const groupKey =
+            edit.targetSection === "spanish_fork"
+              ? "spanish_fork"
+              : `${edit.targetSection}_${edit.targetType === "subscription" ? "subscriptions" : "bills"}`;
+          const list = next[groupKey] ?? [];
+          if (!list.includes(edit.targetName)) next[groupKey] = [...list, edit.targetName];
+        }
+        return next;
+      });
       setTagStatus("success");
-      setTagMessage(`Auto-tagged ${toAutoTag.length} statements! ${manualReviewCount} still need manual review.`);
+      setTagMessage(`Auto-tagged ${toAutoTag.length} statements!`);
+      router.refresh(); // Re-fetch so Current money status and bills "paid this month" update
     } catch (err) {
       setTagStatus("error");
       setTagMessage(err instanceof Error ? err.message : "Auto-tag failed.");
+    }
+  }
+
+  async function handleResetTags() {
+    if (!confirm("Reset all tags? This will delete every categorization rule (e.g. Dog Grooming, Walmart). You can re-tag from scratch. Continue?")) return;
+    setResetTagsStatus("loading");
+    setTagMessage("");
+    try {
+      const res = await fetch("/api/statement-tags/reset", { method: "DELETE", credentials: "include" });
+      const data = (await res.json()) as { ok?: boolean; deleted?: number; message?: string };
+      if (res.ok && data.ok) {
+        setTagSuggestions([]);
+        setSavedIds(new Set());
+        setTagEdits({});
+        setTagStatus("idle");
+        setTagMessage(`Reset complete. Deleted ${data.deleted ?? 0} rule(s). Click "Load statement rows" to re-categorize.`);
+        setResetTagsStatus("idle");
+        router.refresh();
+      } else {
+        setResetTagsStatus("idle");
+        setTagStatus("error");
+        setTagMessage(data.message ?? "Reset failed.");
+      }
+    } catch (err) {
+      setResetTagsStatus("idle");
+      setTagStatus("error");
+      setTagMessage(err instanceof Error ? err.message : "Reset failed.");
     }
   }
 
@@ -359,12 +523,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                 <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {tagSuggestions.length === 0
                     ? "No rows loaded yet."
-                    : `${savedIds.size} saved · ${unsavedCount} left`}
-                  {autoTaggableCount > 0 && (
-                    <span className="ml-2 text-emerald-600 dark:text-emerald-400 font-medium">
-                      ({autoTaggableCount} auto-taggable)
-                    </span>
-                  )}
+                    : `${tagSuggestions.length} need categorizing · ${savedIds.size} saved this session`}
                 </span>
                 {autoTaggableCount > 0 && (
                   <button
@@ -376,6 +535,15 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                     {tagStatus === "saving" ? "Auto-tagging…" : `Auto-tag ${autoTaggableCount} matching`}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => void handleResetTags()}
+                  disabled={resetTagsStatus === "loading" || tagStatus === "loading"}
+                  className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 px-3 py-1.5 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50"
+                  title="Clear all categorization rules and re-tag from scratch"
+                >
+                  {resetTagsStatus === "loading" ? "Resetting…" : "Reset all tags"}
+                </button>
               </div>
             </div>
 
@@ -383,8 +551,9 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {tagSuggestions.length === 0 && tagStatus !== "loading" && (
                 <p className="text-sm text-neutral-600 dark:text-neutral-300">
-                  Click &quot;Load statement rows&quot; to fetch statement lines from PocketBase and tag
-                  them as bills or subscriptions.
+                  {tagStatus === "success"
+                    ? "All done! Every statement has been categorized or is already handled by a rule."
+                    : 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them as bills or subscriptions. Already-categorized statements won\'t appear again.'}
                 </p>
               )}
               {tagSuggestions.length > 0 && (
@@ -411,7 +580,10 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                         <div className="flex-shrink-0 text-[10px] text-neutral-500 dark:text-neutral-400 w-14">
                           {row.date.slice(5)}
                         </div>
-                        <div className="flex-1 min-w-[100px] text-xs text-neutral-800 dark:text-neutral-200 truncate">
+                        <div
+                          className="flex-1 min-w-[100px] max-w-[420px] text-xs text-neutral-800 dark:text-neutral-200 line-clamp-3 break-words"
+                          title={row.description}
+                        >
                           {row.description}
                         </div>
                         <div className="flex-shrink-0 text-xs font-medium tabular-nums text-neutral-700 dark:text-neutral-300 w-14 text-right">
@@ -444,12 +616,14 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                               const nextType = e.target.value as StatementTagTargetType;
                               const wasAutoTagged = edit.wasAutoTagged ?? false;
                               const originalSuggestion = edit.originalSuggestion;
+                              const isVariableExpense = nextType === "variable_expense";
                               setTagEdits((prev) => ({
                                 ...prev,
                                 [row.id]: {
                                   ...edit,
                                   targetType: nextType,
-                                  // Track if user is overriding an auto-tag
+                                  targetSection: isVariableExpense ? "checking_account" : edit.targetSection,
+                                  targetName: isVariableExpense ? "Variable expenses" : edit.targetName,
                                   wasAutoTagged: wasAutoTagged ? true : undefined,
                                   originalSuggestion: wasAutoTagged && originalSuggestion ? originalSuggestion : undefined,
                                 },
@@ -459,6 +633,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                             <option value="bill">Bill</option>
                             <option value="subscription">Sub</option>
                             <option value="spanish_fork">Spanish Fork</option>
+                            <option value="variable_expense">Variable expenses</option>
                             <option value="auto_transfer">Auto</option>
                             <option value="ignore">Ignore</option>
                           </select>
@@ -489,49 +664,127 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                                 <option value="checking_account">Checking</option>
                                 <option value="spanish_fork">Spanish Fork</option>
                               </select>
-                              <select
-                                className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[120px] max-w-[180px]"
-                                value={edit.targetName}
-                                onChange={(e) => {
-                                  const wasAutoTagged = edit.wasAutoTagged ?? false;
-                                  const originalSuggestion = edit.originalSuggestion;
-                                  setTagEdits((prev) => ({
-                                    ...prev,
-                                    [row.id]: {
-                                      ...edit,
-                                      targetName: e.target.value,
-                                      wasAutoTagged: wasAutoTagged ? true : undefined,
-                                      originalSuggestion: wasAutoTagged && originalSuggestion ? originalSuggestion : undefined,
-                                    },
-                                  }));
-                                }}
-                              >
-                                {(() => {
-                                  const groupKey =
-                                    sect === "spanish_fork"
-                                      ? "spanish_fork"
-                                      : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
-                                  const primaryNames = billNames[groupKey] ?? [];
-                                  const typeSubsections =
-                                    type === "subscription"
-                                      ? subsections.subscriptions
-                                      : subsections.bills;
-                                  const existingNames =
-                                    primaryNames.length > 0 ? primaryNames : typeSubsections;
-                                  const fromBillNames = Array.from(
-                                    new Set(Object.values(billNames).flat() as string[])
-                                  );
-                                  const combined = Array.from(
-                                    new Set([...fromBillNames, ...existingNames])
-                                  );
-                                  const options = combined.length > 0 ? combined : [edit.targetName];
-                                  return options.map((name) => (
-                                    <option key={name} value={name}>
-                                      {name}
-                                    </option>
-                                  ));
-                                })()}
-                              </select>
+                              {addingSubsectionForRowId === row.id ? (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <input
+                                    type="text"
+                                    value={newSubsectionName}
+                                    onChange={(e) => setNewSubsectionName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        const name = newSubsectionName.trim();
+                                        if (name) {
+                                          const groupKey =
+                                            sect === "spanish_fork"
+                                              ? "spanish_fork"
+                                              : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
+                                          setTagEdits((prev) => ({
+                                            ...prev,
+                                            [row.id]: { ...edit, targetName: name },
+                                          }));
+                                          setCustomSubsectionsByGroup((prev) => ({
+                                            ...prev,
+                                            [groupKey]: [...(prev[groupKey] ?? []).filter((n) => n !== name), name],
+                                          }));
+                                          setAddingSubsectionForRowId(null);
+                                          setNewSubsectionName("");
+                                        }
+                                      }
+                                      if (e.key === "Escape") {
+                                        setAddingSubsectionForRowId(null);
+                                        setNewSubsectionName("");
+                                      }
+                                    }}
+                                    placeholder="New subsection name"
+                                    className="text-[10px] rounded border border-sky-400 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[100px] max-w-[160px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400"
+                                    autoFocus
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const name = newSubsectionName.trim();
+                                      if (name) {
+                                        const groupKey =
+                                          sect === "spanish_fork"
+                                            ? "spanish_fork"
+                                            : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
+                                        setTagEdits((prev) => ({
+                                          ...prev,
+                                          [row.id]: { ...edit, targetName: name },
+                                        }));
+                                        setCustomSubsectionsByGroup((prev) => ({
+                                          ...prev,
+                                          [groupKey]: [...(prev[groupKey] ?? []).filter((n) => n !== name), name],
+                                        }));
+                                      }
+                                      setAddingSubsectionForRowId(null);
+                                      setNewSubsectionName("");
+                                    }}
+                                    className="text-[10px] rounded bg-sky-600 text-white px-1.5 py-0.5 font-medium hover:bg-sky-500"
+                                  >
+                                    Use
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAddingSubsectionForRowId(null);
+                                      setNewSubsectionName("");
+                                    }}
+                                    className="text-[10px] text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <select
+                                  className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[120px] max-w-[180px]"
+                                  value={edit.targetName === "" ? "__add_new__" : edit.targetName}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === "__add_new__") {
+                                      setAddingSubsectionForRowId(row.id);
+                                      setNewSubsectionName("");
+                                      return;
+                                    }
+                                    const wasAutoTagged = edit.wasAutoTagged ?? false;
+                                    const originalSuggestion = edit.originalSuggestion;
+                                    setTagEdits((prev) => ({
+                                      ...prev,
+                                      [row.id]: {
+                                        ...edit,
+                                        targetName: val,
+                                        wasAutoTagged: wasAutoTagged ? true : undefined,
+                                        originalSuggestion: wasAutoTagged && originalSuggestion ? originalSuggestion : undefined,
+                                      },
+                                    }));
+                                  }}
+                                >
+                                  <option value="__add_new__">— Add new subsection —</option>
+                                  {(() => {
+                                    const groupKey =
+                                      sect === "spanish_fork"
+                                        ? "spanish_fork"
+                                        : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
+                                    const namesForAccount = billNames[groupKey] ?? [];
+                                    const custom = customSubsectionsByGroup[groupKey] ?? [];
+                                    const typeSubsections =
+                                      type === "subscription"
+                                        ? subsections.subscriptions
+                                        : subsections.bills;
+                                    const options = namesForAccount.length > 0 ? namesForAccount : typeSubsections;
+                                    const merged = [...new Set([...options, ...custom])];
+                                    const withCurrent = edit.targetName && !merged.includes(edit.targetName)
+                                      ? [edit.targetName, ...merged]
+                                      : merged;
+                                    return withCurrent.map((name) => (
+                                      <option key={name} value={name}>
+                                        {displayBillName(name)}
+                                      </option>
+                                    ));
+                                  })()}
+                                </select>
+                              )}
                             </>
                           )}
                           {/* Goal selector - available for all statement types */}
@@ -573,11 +826,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                 <div className="flex flex-wrap gap-2 justify-start">
                   <button
                     type="button"
-                    onClick={() => void saveBatch(BATCH_SIZE)}
-                    disabled={tagStatus === "saving" || unsavedCount === 0}
+                    onClick={() => void saveVisibleBatch()}
+                    disabled={tagStatus === "saving" || visibleRows.length === 0}
                     className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
+                    title="Save all displayed rows (new tags and tag changes; replaces old tag with new)"
                   >
-                    {tagStatus === "saving" ? "Saving…" : `Save next ${Math.min(BATCH_SIZE, unsavedCount) || BATCH_SIZE}`}
+                    {tagStatus === "saving" ? "Saving…" : `Save displayed (${visibleRows.length})`}
                   </button>
                   <button
                     type="button"

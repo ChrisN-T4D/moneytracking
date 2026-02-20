@@ -41,6 +41,47 @@ const AUTO_TRANSFER_TO = [
   { re: /online\s*transfer\s*to\s*neu\s+c.*way2save.*venmo/i, whatFor: "Venmo From Kerrie to Right Place" },
 ];
 
+/** True if the statement description looks like a transfer (not a bill/expense) — exclude from "Add items to bills" and "paid this month". */
+export function isTransferDescription(description: string): boolean {
+  const d = (description ?? "").trim();
+  if (!d) return false;
+
+  // Specific known auto-transfer patterns
+  for (const { re } of [...AUTO_TRANSFER_FROM, ...AUTO_TRANSFER_TO]) {
+    if (re.test(d)) return true;
+  }
+
+  // Recurring / online transfer to/from an account
+  if (/(recurring|online)\s*transfer\s*(from|to)/i.test(d)) return true;
+  if (/transfer\s*(from|to)\s*neu\s*c/i.test(d)) return true;
+
+  // "ONLINE TRANSFER REF …" — Wells Fargo outgoing transfers (bill pay, credit card payments, etc.)
+  if (/online\s*transfer\s*ref\b/i.test(d)) return true;
+
+  // Venmo * NAME payments (e.g. "TRANSFER AUTHORIZED ON 02/15 VENMO * RACHEL DEMILLE CA")
+  // These are person-to-person expenses the user may want to tag as specific bills — let them through.
+  if (/VENMO\s*\*/i.test(d)) return false;
+
+  // "MONEY TRANSFER AUTHORIZED" — wire, P2P payments (excluding Venmo * above)
+  if (/money\s*transfer\s*authorized/i.test(d)) return true;
+
+  // Any bank wire / ACH transfer keyword
+  if (/\bwire\s*transfer\b/i.test(d)) return true;
+  if (/\bACH\s*(transfer|credit|debit)\b/i.test(d)) return true;
+
+  // Goldman Sachs savings transfers ("GOLDMAN SACHS BA TRANSFER …")
+  if (/goldman\s*sachs\b.*transfer/i.test(d)) return true;
+  if (/transfer\b.*goldman\s*sachs/i.test(d)) return true;
+
+  // Generic "TRANSFER AUTHORIZED ON" (Zelle, etc. — Venmo * already handled above)
+  if (/transfer\s*authorized\s*on\b/i.test(d)) return true;
+
+  // Credit card payment transfers
+  if (/payment\s*to\s*(credit\s*card|visa|mastercard|amex|discover)/i.test(d)) return true;
+
+  return false;
+}
+
 function inferFrequency(dates: string[]): "biweekly" | "monthly" | "monthlyLastWorkingDay" {
   if (dates.length < 2) return "biweekly";
   const parsed = dates.map((d) => new Date(d).getTime()).sort((a, b) => a - b);

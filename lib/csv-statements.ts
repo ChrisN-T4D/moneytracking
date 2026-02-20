@@ -1,7 +1,9 @@
 /**
  * Parse statement CSV and map columns to StatementRecord fields.
- * Expects first row to be headers. Common column names: Date, Description, Amount, Balance, Memo, Category.
- * Amount can be one column (negative = debit) or separate Debit/Credit columns.
+ * Supports:
+ * 1. Wells Fargo activity export (no header): Date, Amount, *, "", Description — full history CSV.
+ * 2. Header-based CSV: first row = headers. Common column names: Date, Description, Amount, Balance, Memo, Category.
+ *    Amount can be one column (negative = debit) or separate Debit/Credit columns.
  */
 
 export interface StatementRow {
@@ -50,7 +52,7 @@ function findCol(headers: string[], names: string[]): number {
   return -1;
 }
 
-/** Parse numeric value from CSV cell (removes $ and commas). */
+/** Parse numeric value from CSV cell (removes $ and commas). Keeps sign. */
 function parseNum(s: string): number {
   if (!s || s.trim() === "") return 0;
   const cleaned = s.replace(/[$,]/g, "").trim();
@@ -58,9 +60,55 @@ function parseNum(s: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** True if first line looks like Wells Fargo activity export: "MM/DD/YYYY","±amount","*","","description" */
+function isWellsFargoActivityFormat(firstLine: string): boolean {
+  const cells = parseCsvLine(firstLine);
+  if (cells.length < 5) return false;
+  const date = (cells[0] ?? "").trim();
+  const amountStr = (cells[1] ?? "").trim();
+  const desc = (cells[4] ?? "").trim();
+  if (!desc) return false;
+  if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(date)) return false;
+  if (!/^-?\d+\.?\d*$/.test(amountStr)) return false;
+  return true;
+}
+
+/** Convert MM/DD/YYYY to YYYY-MM-DD for consistent storage. */
+function toIsoDate(s: string): string {
+  const m = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return s;
+  const [, month, day, year] = m;
+  return `${year}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
+}
+
+/** Parse Wells Fargo activity CSV (no header). Columns: Date, Amount, *, "", Description. */
+function parseWellsFargoActivityCsv(
+  lines: string[],
+  options?: { account?: string; sourceFile?: string }
+): StatementRow[] {
+  const rows: StatementRow[] = [];
+  for (const line of lines) {
+    const cells = parseCsvLine(line);
+    if (cells.length < 5) continue;
+    const dateRaw = (cells[0] ?? "").trim();
+    const amountStr = (cells[1] ?? "").trim();
+    const description = (cells[4] ?? "").trim();
+    if (!dateRaw || !description) continue;
+    const amount = parseNum(amountStr);
+    rows.push({
+      date: toIsoDate(dateRaw),
+      description,
+      amount,
+      account: options?.account,
+      sourceFile: options?.sourceFile,
+    });
+  }
+  return rows;
+}
+
 /**
  * Parse CSV text into statement rows.
- * First row = headers. Maps: date, description, amount (or debit/credit), balance, memo, category.
+ * Auto-detects Wells Fargo activity export (no header) or uses first row as headers.
  * Optionally pass account and sourceFile to attach to every row.
  */
 export function parseStatementCsv(
@@ -68,9 +116,16 @@ export function parseStatementCsv(
   options?: { account?: string; sourceFile?: string }
 ): StatementRow[] {
   const lines = csvText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+
+  const firstLine = lines[0];
+  if (lines.length >= 1 && isWellsFargoActivityFormat(firstLine)) {
+    return parseWellsFargoActivityCsv(lines, options);
+  }
+
   if (lines.length < 2) return [];
 
-  const headerLine = lines[0];
+  const headerLine = firstLine;
   const headers = parseCsvLine(headerLine);
   const dateCol = findCol(headers, ["date", "transaction date", "posting date", "trans date"]);
   const descCol = findCol(headers, ["description", "memo", "payee", "details", "name"]);

@@ -11,6 +11,7 @@ type BillUpdateBody = {
   frequency?: string;
   inThisPaycheck?: boolean;
   autoTransferNote?: string | null;
+  subsection?: string | null;
 };
 
 const allowedFrequencies = ["2weeks", "monthly", "yearly"] as const;
@@ -69,6 +70,9 @@ export async function PATCH(
   if (body.autoTransferNote !== undefined) {
     payload.autoTransferNote = body.autoTransferNote ?? null;
   }
+  if (body.subsection !== undefined) {
+    payload.subsection = body.subsection === null || body.subsection === "" ? null : String(body.subsection).trim();
+  }
 
   if (Object.keys(payload).length === 0) {
     return NextResponse.json({ ok: false, message: "No valid fields to update." }, { status: 400 });
@@ -112,4 +116,60 @@ export async function PATCH(
 
   const data = (await res.json()) as Record<string, unknown>;
   return NextResponse.json({ ok: true, record: data });
+}
+
+/** DELETE /api/bills/[id] — delete a bill/subscription record in PocketBase. */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const base = getPbBase();
+  if (!base) {
+    return NextResponse.json(
+      { ok: false, message: "PocketBase URL not configured." },
+      { status: 500 }
+    );
+  }
+
+  const { id } = await params;
+  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+    return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
+  }
+
+  let authToken: string | null = await getTokenFromCookie().catch(() => null);
+  let apiBase = base;
+  if (!authToken) {
+    const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+    const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+    if (email && password) {
+      try {
+        const result = await getAdminToken(base, email, password);
+        authToken = result.token;
+        apiBase = result.baseUrl;
+      } catch {}
+    }
+  }
+  if (!authToken) {
+    return NextResponse.json(
+      { ok: false, message: "Not authenticated. Sign in or set PocketBase admin credentials." },
+      { status: 401 }
+    );
+  }
+
+  const url = `${apiBase.replace(/\/$/, "")}/api/collections/bills/records/${id}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${authToken}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    return NextResponse.json(
+      { ok: false, message: `Delete failed: ${res.status} ${text}` },
+      { status: res.status >= 500 ? 502 : res.status }
+    );
+  }
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/");
+  return NextResponse.json({ ok: true });
 }

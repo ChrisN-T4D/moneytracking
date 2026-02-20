@@ -5,7 +5,7 @@ import type {
   BillListAccount,
   BillListType,
 } from "./types";
-import { suggestBillGroup, billNameFromDescription } from "./statementsAnalysis";
+import { suggestBillGroup, billNameFromDescription, isTransferDescription } from "./statementsAnalysis";
 
 /** One suggestion row for the tagging wizard. */
 export interface StatementTagSuggestion {
@@ -21,9 +21,64 @@ export interface StatementTagSuggestion {
   matchType?: "exact_pattern" | "normalized_description" | "heuristic";
 }
 
-/** Simple pattern key based on description (first few words uppercased). */
+/**
+ * Pattern key for matching statements to rules.
+ * For Wells Fargo-style "PURCHASE AUTHORIZED ON MM/DD MERCHANT..." we use the merchant part
+ * so each store gets its own pattern (e.g. "GROOM CLOSET PET" vs "ENID PET HOSPITAL").
+ * Otherwise we'd get "PURCHASE AUTHORIZED ON" for every purchase and one tag would match all.
+ */
 export function makeStatementPattern(description: string): string {
-  return description.trim().split(/\s+/).slice(0, 3).join(" ").toUpperCase();
+  const d = description.trim();
+  if (!d) return "";
+
+  // Strip "PURCHASE AUTHORIZED ON MM/DD" or "TRANSFER AUTHORIZED ON MM/DD" prefix
+  // Wells Fargo uses both for different transaction types (debit card vs P2P)
+  const authorizedMatch = d.match(
+    /^(?:PURCHASE|TRANSFER|MONEY\s+TRANSFER)\s+AUTHORIZED\s+ON\s+\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\s+(.+)$/i
+  );
+  const merchantPart = authorizedMatch ? authorizedMatch[1].trim() : null;
+
+  // The core string to analyze (merchant part if available, else full description)
+  const core = merchantPart ?? d;
+
+  // Amazon: normalize all Amazon/AMZN purchases to a single stable pattern
+  // Descriptions vary per transaction ("AMAZON.COM/BILLWA", "AMZN MKTP US*AB123", etc.)
+  if (/^(AMAZON|AMZN)\b/i.test(core)) {
+    return "AMAZON";
+  }
+
+  // Venmo: "VENMO * RACHEL DEMILLE CA" - extract person/merchant name after the asterisk
+  const venmoMatch = core.match(/^VENMO\s*\*\s*(.+)$/i);
+  if (venmoMatch) {
+    const rest = venmoMatch[1].trim();
+    // Strip trailing 2-letter state code (e.g., "CA", "NY", "WA")
+    const cleaned = rest.replace(/\s+[A-Z]{2}$/i, "").trim();
+    const words = cleaned.split(/\s+/).slice(0, 3).join(" ").toUpperCase();
+    return `VENMO ${words}`;
+  }
+
+  // If we extracted a merchant part (from AUTHORIZED ON prefix), use first 4 words
+  if (merchantPart) {
+    const words = merchantPart.split(/\s+/).slice(0, 4).join(" ").toUpperCase();
+    return words || d.split(/\s+/).slice(0, 3).join(" ").toUpperCase();
+  }
+
+  // PayPal: "PAYPAL INST XFER 260214 DISCORD CHRISTOPHER NEU"
+  const paypalMatch = d.match(/^PAYPAL\s+INST\s+XFER\s+\d{6}\s+(.+)$/i);
+  if (paypalMatch) {
+    const rest = paypalMatch[1].trim();
+    const words = rest.split(/\s+/).slice(0, 3).join(" ").toUpperCase();
+    return words || d.split(/\s+/).slice(0, 3).join(" ").toUpperCase();
+  }
+
+  // Zelle: "ZELLE TO KERRIE" or "ZELLE FROM ..."
+  const zelleMatch = d.match(/^ZELLE\s+(TO|FROM)\s+(\S+)/i);
+  if (zelleMatch) {
+    return `ZELLE ${zelleMatch[1].toUpperCase()} ${zelleMatch[2].toUpperCase()}`;
+  }
+
+  // Fallback: first 3 words of full description
+  return d.split(/\s+/).slice(0, 3).join(" ").toUpperCase();
 }
 
 export interface MatchResult {
@@ -87,14 +142,19 @@ export function suggestTagsForStatements(
   rules: StatementTagRule[]
 ): StatementTagSuggestion[] {
   return statements.map((s) => {
+    const heuristicName = billNameFromDescription(s.description);
     const matched = matchRule(rules, s);
     if (matched) {
+      // If description matches known Walmart store format (#4390 Enid OK), prefer Walmart over any rule that suggested something else
+      const targetName =
+        heuristicName === "Walmart"
+          ? "Walmart"
+          : (matched.rule.targetName ?? matched.rule.normalizedDescription ?? heuristicName);
       return {
         statement: s,
         targetType: matched.rule.targetType,
         targetSection: matched.rule.targetSection,
-        targetName:
-          matched.rule.targetName ?? matched.rule.normalizedDescription ?? billNameFromDescription(s.description),
+        targetName,
         goalId: matched.rule.goalId ?? null,
         confidence: matched.confidence,
         matchType: matched.matchType,
@@ -148,28 +208,34 @@ export function computeActualsForMonth(
   const monthEnd = new Date(year, month + 1, 1);
   const inMonth = statements.filter((s) => {
     const d = new Date(s.date);
-    return d >= monthStart && d < monthEnd;
+    if (d < monthStart || d >= monthEnd) return false;
+    // Always exclude transfers — even if a rule was accidentally created for one
+    if (isTransferDescription(s.description ?? "")) return false;
+    return true;
   });
   const suggestions = suggestTagsForStatements(inMonth, rules);
   const map = new Map<string, ActualRow>();
 
   for (const sug of suggestions) {
+    // Only count statements where a real rule matched — never count heuristic guesses.
+    // Heuristic suggestions have matchType === "heuristic" and no rule behind them.
+    if (sug.matchType === "heuristic") continue;
     if (
-      !["bill", "subscription", "spanish_fork"].includes(sug.targetType) ||
+      !["bill", "subscription", "spanish_fork", "variable_expense"].includes(sug.targetType) ||
       !sug.targetSection
     ) {
       continue;
     }
     const listType: BillListType =
       sug.targetType === "subscription" ? "subscriptions" : "bills";
-    const key = `${sug.targetSection}|${sug.targetName}|${listType}`;
+    const key = `${sug.targetSection}|${sug.targetName ?? ""}|${listType}`;
     const prev = map.get(key);
     const amount = Math.abs(sug.statement.amount);
     if (prev) {
       prev.actualAmount += amount;
     } else {
       map.set(key, {
-        name: sug.targetName,
+        name: sug.targetName ?? "Variable expenses",
         section: sug.targetSection,
         listType,
         actualAmount: amount,
@@ -204,5 +270,109 @@ export function computeThisMonthActuals(
     today.getFullYear(),
     today.getMonth()
   );
+}
+
+/** One contributing transaction for the breakdown popup. */
+export interface ActualBreakdownItem {
+  date: string;
+  description: string;
+  amount: number;
+}
+
+/**
+ * Same as computeActualsForMonth but also returns per-bill breakdown of contributing statements.
+ * Key = `${section}|${listType}|${name.toLowerCase()}` to match paidThisMonthByBill.
+ */
+export function computeActualsForMonthWithBreakdown(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  year: number,
+  month: number
+): { rows: ActualRow[]; breakdown: Map<string, ActualBreakdownItem[]> } {
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 1);
+  const inMonth = statements.filter((s) => {
+    const d = new Date(s.date);
+    if (d < monthStart || d >= monthEnd) return false;
+    if (isTransferDescription(s.description ?? "")) return false;
+    return true;
+  });
+  const suggestions = suggestTagsForStatements(inMonth, rules);
+  const map = new Map<string, ActualRow>();
+  const breakdown = new Map<string, ActualBreakdownItem[]>();
+
+  for (const sug of suggestions) {
+    if (sug.matchType === "heuristic") continue;
+    if (
+      !["bill", "subscription", "spanish_fork", "variable_expense"].includes(sug.targetType) ||
+      !sug.targetSection
+    ) {
+      continue;
+    }
+    const listType: BillListType =
+      sug.targetType === "subscription" ? "subscriptions" : "bills";
+    const nameLower = (sug.targetName ?? "").toLowerCase();
+    const key = `${sug.targetSection}|${listType}|${nameLower}`;
+    const amount = Math.abs(sug.statement.amount);
+    const item: ActualBreakdownItem = {
+      date: sug.statement.date,
+      description: sug.statement.description ?? "",
+      amount,
+    };
+
+    const prev = map.get(key);
+    if (prev) {
+      prev.actualAmount += amount;
+    } else {
+      map.set(key, {
+        name: sug.targetName,
+        section: sug.targetSection,
+        listType,
+        actualAmount: amount,
+      });
+    }
+    if (!breakdown.has(key)) breakdown.set(key, []);
+    breakdown.get(key)!.push(item);
+  }
+  return { rows: Array.from(map.values()), breakdown };
+}
+
+/** Key used in paidThisMonthByBill for variable expenses (checking_account bills). */
+export const VARIABLE_EXPENSES_BILL_KEY = "checking_account|bills|variable expenses";
+
+/** Sum of tagged statement amounts for given bill keys within [startDate, endDate). Used for per-paycheck groceries & gas. */
+export function computeSpentForBillKeysInDateRange(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  startDate: Date,
+  endDate: Date,
+  billKeys: string[]
+): number {
+  const keySet = new Set(billKeys.map((k) => k.toLowerCase()));
+  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  const inRange = statements.filter((s) => {
+    const d = new Date(s.date);
+    if (Number.isNaN(d.getTime())) return false;
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    if (day < start || day >= end) return false;
+    if (isTransferDescription(s.description ?? "")) return false;
+    return true;
+  });
+  const suggestions = suggestTagsForStatements(inRange, rules);
+  let sum = 0;
+  for (const sug of suggestions) {
+    if (sug.matchType === "heuristic") continue;
+    if (
+      !["bill", "subscription", "spanish_fork"].includes(sug.targetType) ||
+      !sug.targetSection
+    )
+      continue;
+    const listType: BillListType =
+      sug.targetType === "subscription" ? "subscriptions" : "bills";
+    const key = `${sug.targetSection}|${listType}|${sug.targetName.toLowerCase()}`;
+    if (keySet.has(key)) sum += Math.abs(sug.statement.amount);
+  }
+  return sum;
 }
 

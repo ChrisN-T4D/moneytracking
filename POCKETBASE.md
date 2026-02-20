@@ -104,7 +104,7 @@ Auto-transfer rows (what for, frequency, account, date, amount).
 
 ### 4. `spanish_fork_bills`
 
-Spanish Fork rental bills (with optional tenant-paid amount).
+The **Spanish Fork (Rental)** section in the app reads and writes this collection. Rental bills with an optional tenant-paid checkbox.
 
 | Field          | Type       | Required | Notes |
 |----------------|------------|----------|--------|
@@ -113,7 +113,7 @@ Spanish Fork rental bills (with optional tenant-paid amount).
 | nextDue        | Plain text | yes      | e.g. "Mar 6, 2026" |
 | inThisPaycheck | Bool       | yes      | In current paycheck? |
 | amount         | Number     | yes      | Dollar amount |
-| tenantPaid     | Number     | no       | Amount tenant paid; leave empty for "—" |
+| tenantPaid     | Bool       | no       | Whether the tenant has paid (checkbox in UI) |
 
 ---
 

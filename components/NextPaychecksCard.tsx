@@ -26,6 +26,33 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
   const [editing, setEditing] = useState<NextPaycheckInfo | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [markingReceived, setMarkingReceived] = useState<string | null>(null); // id of row being marked
+  const [markError, setMarkError] = useState<Record<string, string>>({});
+
+  async function markReceived(p: NextPaycheckInfo) {
+    const today = new Date();
+    const anchorDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    setMarkingReceived(p.id);
+    setMarkError((e) => { const n = { ...e }; delete n[p.id]; return n; });
+    try {
+      const res = await fetch(`/api/paychecks/${p.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ anchorDate }),
+        credentials: "include",
+      });
+      const data = (await res.json()) as { ok?: boolean; message?: string };
+      if (!res.ok) {
+        setMarkError((e) => ({ ...e, [p.id]: data.message ?? "Save failed" }));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setMarkError((e) => ({ ...e, [p.id]: "Save failed" }));
+    } finally {
+      setMarkingReceived(null);
+    }
+  }
 
   const displayToday = clientToday ?? today;
   // Always derive next dates from configs on the client so dates never carry a UTC offset.
@@ -43,13 +70,15 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
     const amountRaw = (form.elements.namedItem("amount") as HTMLInputElement)?.value?.trim();
     const amount = amountRaw === "" || amountRaw === undefined ? null : Number(amountRaw);
     const frequency = ((form.elements.namedItem("frequency") as HTMLSelectElement)?.value ?? editing.frequency) as PaycheckFrequency;
+    const anchorDateRaw = (form.elements.namedItem("anchorDate") as HTMLInputElement)?.value?.trim();
+    const anchorDate = anchorDateRaw || null;
     setSaving(true);
     setError(null);
     try {
       const res = await fetch(`/api/paychecks/${editing.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, amount, frequency }),
+        body: JSON.stringify({ name, amount, frequency, anchorDate }),
         credentials: "include",
       });
       const data = (await res.json()) as { ok?: boolean; message?: string };
@@ -136,6 +165,32 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                       <option value="monthlyLastWorkingDay">Last working day of month</option>
                     </select>
                   </label>
+                  {p.frequency === "biweekly" && (
+                    <div className="space-y-1">
+                      <label className="block text-xs text-neutral-500 dark:text-neutral-400">
+                        Last paycheck date
+                        <input
+                          name="anchorDate"
+                          type="date"
+                          defaultValue={p.anchorDate ?? ""}
+                          className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-600 dark:bg-neutral-800"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const input = document.querySelector<HTMLInputElement>('input[name="anchorDate"]');
+                          if (input) {
+                            const today = new Date();
+                            input.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+                          }
+                        }}
+                        className="text-xs text-sky-600 dark:text-sky-400 underline hover:no-underline"
+                      >
+                        Mark as received today
+                      </button>
+                    </div>
+                  )}
                   {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
                   <div className="flex gap-2">
                     <button
@@ -190,7 +245,7 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                       </span>
                     </div>
                   </div>
-                  {/* Line 2: "for March" (small) + freq / days / edit */}
+                  {/* Line 2: freq / days / edit / mark received */}
                   <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                     {billingMonth && (
                       <span className="text-[10px] leading-tight bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded px-1 py-0.5 font-medium">
@@ -217,7 +272,26 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                         Edit
                       </button>
                     )}
+                    {canEdit && !p.id.startsWith("default-") && p.frequency === "biweekly" && (
+                      <button
+                        type="button"
+                        disabled={markingReceived === p.id}
+                        onClick={() => void markReceived(p)}
+                        className="text-xs text-emerald-600 dark:text-emerald-400 underline hover:no-underline disabled:opacity-50"
+                      >
+                        {markingReceived === p.id ? "Saving…" : "Received today"}
+                      </button>
+                    )}
                   </div>
+                  {/* Anchor date hint + error */}
+                  {p.frequency === "biweekly" && p.anchorDate && (
+                    <p className="text-[10px] text-neutral-400 dark:text-neutral-500 mt-0.5">
+                      Last pay: {p.anchorDate}
+                    </p>
+                  )}
+                  {markError[p.id] && (
+                    <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">{markError[p.id]}</p>
+                  )}
                 </>
               )}
             </li>

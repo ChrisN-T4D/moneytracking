@@ -27,7 +27,7 @@ export interface SpanishForkBill {
   nextDue: string;
   inThisPaycheck: boolean;
   amount: number;
-  tenantPaid: number | null;
+  tenantPaid: boolean;
 }
 
 export interface Summary {
@@ -108,6 +108,7 @@ export type StatementTagTargetType =
   | "subscription"
   | "spanish_fork"
   | "auto_transfer"
+  | "variable_expense"
   | "ignore";
 
 export type ConfidenceLevel = "HIGH" | "MEDIUM" | "LOW";

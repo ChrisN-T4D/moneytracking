@@ -14,6 +14,7 @@ import type {
   MoneyGoal,
 } from "./types";
 import type { Frequency } from "./types";
+import { getNextDueAndPaycheck, getTodayUTC, parseFlexibleDate, formatDateToYYYYMMDD } from "./paycheckDates";
 import { getAdminToken } from "./pocketbase-setup";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
@@ -124,8 +125,18 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
       const lastEditedBy = (rawItem.lastEditedBy ?? rawItem.last_edited_by) as string | null | undefined;
       const lastEditedAt = (rawItem.lastEditedAt ?? rawItem.last_edited_at) as string | null | undefined;
       const lastEditedByUserId = (rawItem.lastEditedByUserId ?? rawItem.last_edited_by_user_id) as string | null | undefined;
-      const anchorDateRaw = (rawItem.anchorDate ?? rawItem.anchor_date ?? getByNormalizedKey(rawItem, "anchorDate")) as string | null | undefined;
-      const anchorDate = anchorDateRaw != null && String(anchorDateRaw).trim() !== "" ? String(anchorDateRaw).trim() : null;
+      const anchorDateRaw = (rawItem.anchordate ?? rawItem.anchorDate ?? rawItem.anchor_date ?? getByNormalizedKey(rawItem, "anchorDate")) as string | null | undefined;
+      const anchorDateStr = anchorDateRaw != null && String(anchorDateRaw).trim() !== "" ? String(anchorDateRaw).trim() : null;
+      const anchorDate = anchorDateStr
+        ? (() => {
+            // PocketBase returns dates as "YYYY-MM-DD HH:mm:ss.SSSZ". Slice the date portion
+            // directly to avoid UTC→local timezone shift turning e.g. Feb 20 into Feb 19.
+            const dateOnly = anchorDateStr.substring(0, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return dateOnly;
+            const parsed = parseFlexibleDate(anchorDateStr);
+            return !Number.isNaN(parsed.getTime()) ? formatDateToYYYYMMDD(parsed) : anchorDateStr;
+          })()
+        : null;
       return {
         id: item.id,
         name: item.name ?? "",
@@ -203,13 +214,34 @@ function parseFrequency(s: string | undefined): Frequency {
   return "monthly";
 }
 
-function parseBill(item: PbBill): BillOrSub {
+function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
+  const ref = getTodayUTC();
+  const rawNextDue = (item.nextDue ?? "").trim();
+  // When nextDue is explicitly blank (user cleared it), don't recalculate
+  if (!rawNextDue) {
+    return {
+      id: item.id,
+      name: item.name ?? "",
+      frequency: parseFrequency(item.frequency),
+      nextDue: "",
+      inThisPaycheck: false,
+      amount: Number(item.amount) || 0,
+      autoTransferNote: item.autoTransferNote ?? undefined,
+      subsection: item.subsection ?? null,
+    };
+  }
+  const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
+    rawNextDue,
+    item.frequency ?? "monthly",
+    ref,
+    paycheckEndDate
+  );
   return {
     id: item.id,
     name: item.name ?? "",
     frequency: parseFrequency(item.frequency),
-    nextDue: item.nextDue ?? "",
-    inThisPaycheck: Boolean(item.inThisPaycheck),
+    nextDue,
+    inThisPaycheck,
     amount: Number(item.amount) || 0,
     autoTransferNote: item.autoTransferNote ?? undefined,
     subsection: item.subsection ?? null,
@@ -220,14 +252,15 @@ function parseBill(item: PbBill): BillOrSub {
 export type BillOrSubWithMeta = BillOrSub & { account?: string; listType?: string; subsection?: string | null };
 
 /** Fetch all bills/subscriptions from PocketBase (with account/listType for section filtering). */
-export async function getBillsWithMeta(): Promise<BillOrSubWithMeta[]> {
+export async function getBillsWithMeta(paycheckEndDate?: Date | null): Promise<BillOrSubWithMeta[]> {
   if (!POCKETBASE_URL) return [];
-  try {
-    const data = await pbFetch<PbListResponse<PbBill>>(
-      "/api/collections/bills/records?perPage=500"
-    );
-    return (data.items ?? []).map((item) => {
-      const b = parseBill(item);
+  const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  const adminApiBase = POCKETBASE_API_URL || BASE;
+
+  function mapItems(items: PbBill[]): BillOrSubWithMeta[] {
+    return (items ?? []).map((item) => {
+      const b = parseBill(item, paycheckEndDate);
       return {
         ...b,
         account: item.account,
@@ -235,6 +268,29 @@ export async function getBillsWithMeta(): Promise<BillOrSubWithMeta[]> {
         subsection: item.subsection ?? b.subsection ?? null,
       } as BillOrSubWithMeta;
     });
+  }
+
+  try {
+    if (adminApiBase && adminEmail && adminPassword) {
+      try {
+        const { token, baseUrl } = await getAdminToken(adminApiBase, adminEmail, adminPassword);
+        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/collections/bills/records?perPage=500`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = (await res.json()) as PbListResponse<PbBill>;
+          return mapItems(data.items ?? []);
+        }
+      } catch {
+        // fall through to unauthenticated
+      }
+    }
+    // no-store so new subsections created in "Add items to bills" show as rows on the main page after refresh
+    const res = await fetch(`${BASE}/api/collections/bills/records?perPage=500`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PbListResponse<PbBill>;
+    return mapItems(data.items ?? []);
   } catch {
     return [];
   }
@@ -245,8 +301,69 @@ export function filterBillsWithMeta(
   bills: BillOrSubWithMeta[],
   account: BillListAccount,
   listType: BillListType
-): BillOrSub[] {
+): BillOrSubWithMeta[] {
   return bills.filter((b) => b.account === account && b.listType === listType);
+}
+
+const GROUP_ID_PREFIX = "group-";
+
+/** Normalize bill name for grouping so "OG & E (Electricity)" and "OG&E (Electricity)" merge. */
+export function normalizeKeyForGrouping(name: string): string {
+  const s = (name ?? "").toLowerCase().trim();
+  return s.replace(/\s+/g, "").replace(/&/g, "");
+}
+
+/**
+ * Group bills by subsection (or by normalized name when subsection empty).
+ * Returns grouped items and a map from group key to display name for aggregating paid/breakdown.
+ */
+export function groupBillsBySubsection(bills: BillOrSubWithMeta[]): {
+  items: BillOrSub[];
+  groupKeyToDisplayName: Map<string, string>;
+} {
+  const byKey = new Map<string, BillOrSubWithMeta[]>();
+  for (const b of bills) {
+    const key =
+      b.subsection && b.subsection.trim()
+        ? b.subsection.trim()
+        : normalizeKeyForGrouping(b.name);
+    const list = byKey.get(key) ?? [];
+    list.push(b);
+    byKey.set(key, list);
+  }
+  const groupKeyToDisplayName = new Map<string, string>();
+  const result: BillOrSub[] = [];
+  for (const [key, list] of byKey) {
+    if (list.length === 0) continue;
+    const first = list[0]!;
+    const displayName = first.name;
+    groupKeyToDisplayName.set(key, displayName);
+    const amounts = list.map((b) => Number(b.amount) || 0);
+    const totalAmount = amounts.reduce((a, b) => a + b, 0);
+    const nextDues = list.map((b) => b.nextDue).filter((s) => s && s.trim());
+    const earliestNextDue =
+      nextDues.length > 0 ? nextDues.reduce((a, b) => (a < b ? a : b)) : "";
+    const inThisPaycheck = list.some((b) => b.inThisPaycheck === true);
+    const frequency = first.frequency ?? "monthly";
+    const id =
+      list.length === 1 ? first.id : `${GROUP_ID_PREFIX}${displayName}`;
+    result.push({
+      id,
+      name: displayName,
+      frequency,
+      nextDue: earliestNextDue,
+      inThisPaycheck,
+      amount: totalAmount,
+      autoTransferNote: list.length === 1 ? first.autoTransferNote : undefined,
+      subsection: key,
+    });
+  }
+  return { items: result, groupKeyToDisplayName };
+}
+
+/** True if a BillOrSub id represents a grouped row (multiple bills under one subsection). */
+export function isGroupedBillId(id: string): boolean {
+  return id.startsWith(GROUP_ID_PREFIX);
 }
 
 // --- Auto transfers ---
@@ -289,25 +406,35 @@ interface PbSpanishForkBill {
   nextDue?: string;
   inThisPaycheck?: boolean;
   amount?: number;
-  tenantPaid?: number | null;
+  tenantPaid?: boolean;
 }
 
 /** Fetch Spanish Fork bills from PocketBase. Returns [] if URL not set or request fails. */
-export async function getSpanishForkBills(): Promise<SpanishForkBill[]> {
+export async function getSpanishForkBills(paycheckEndDate?: Date | null): Promise<SpanishForkBill[]> {
   if (!POCKETBASE_URL) return [];
   try {
-    const data = await pbFetch<PbListResponse<PbSpanishForkBill>>(
-      "/api/collections/spanish_fork_bills/records?perPage=200"
-    );
-    return (data.items ?? []).map((item) => ({
-      id: item.id,
-      name: item.name ?? "",
-      frequency: item.frequency ?? "",
-      nextDue: item.nextDue ?? "",
-      inThisPaycheck: Boolean(item.inThisPaycheck),
-      amount: Number(item.amount) || 0,
-      tenantPaid: item.tenantPaid != null ? Number(item.tenantPaid) : null,
-    }));
+    // no-store so tenantPaid changes (e.g. cleared in PocketBase) show after refresh
+    const res = await fetch(`${BASE}/api/collections/spanish_fork_bills/records?perPage=200`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PbListResponse<PbSpanishForkBill>;
+    const ref = getTodayUTC();
+    return (data.items ?? []).map((item) => {
+      const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
+        item.nextDue ?? "",
+        item.frequency ?? "monthly",
+        ref,
+        paycheckEndDate
+      );
+      return {
+        id: item.id,
+        name: item.name ?? "",
+        frequency: item.frequency ?? "",
+        nextDue,
+        inThisPaycheck,
+        amount: Number(item.amount) || 0,
+        tenantPaid: Boolean(item.tenantPaid),
+      };
+    });
   } catch {
     return [];
   }
@@ -332,15 +459,14 @@ interface PbSummary {
   spanishForkBalance?: number | null;
 }
 
-/** Fetch summary (first record) from PocketBase. Returns null if URL not set or request fails. */
+/** Fetch summary (first record) from PocketBase. Returns null if URL not set or request fails. Uses admin auth when configured so balance fields are readable. */
 export async function getSummary(): Promise<Summary | null> {
   if (!POCKETBASE_URL) return null;
-  try {
-    const data = await pbFetch<PbListResponse<PbSummary>>(
-      "/api/collections/summary/records?perPage=1"
-    );
-    const item = data.items?.[0];
-    if (!item) return null;
+  const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  const apiBaseUrl = POCKETBASE_API_URL || BASE;
+
+  function parseSummaryItem(item: PbSummary): Summary {
     return {
       monthlyTotal: Number(item.monthlyTotal) || 0,
       totalNeeded: Number(item.totalNeeded) || 0,
@@ -356,6 +482,33 @@ export async function getSummary(): Promise<Summary | null> {
       billsBalance: item.billsBalance != null ? Number(item.billsBalance) : null,
       spanishForkBalance: item.spanishForkBalance != null ? Number(item.spanishForkBalance) : null,
     };
+  }
+
+  try {
+    // Try admin auth first so restricted collections return balance fields
+    if (apiBaseUrl && adminEmail && adminPassword) {
+      try {
+        const { token, baseUrl } = await getAdminToken(apiBaseUrl, adminEmail, adminPassword);
+        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/collections/summary/records?perPage=1`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = (await res.json()) as PbListResponse<PbSummary>;
+          const item = data.items?.[0];
+          if (item) return parseSummaryItem(item);
+        }
+      } catch {
+        // fall through to unauthenticated
+      }
+    }
+    // Fallback: unauthenticated
+    const res = await fetch(`${BASE}/api/collections/summary/records?perPage=1`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as PbListResponse<PbSummary>;
+    const item = data.items?.[0];
+    if (!item) return null;
+    return parseSummaryItem(item);
   } catch {
     return null;
   }
@@ -377,9 +530,10 @@ interface PbGoal {
 export async function getGoals(): Promise<MoneyGoal[]> {
   if (!POCKETBASE_URL) return [];
   try {
-    const data = await pbFetch<PbListResponse<PbGoal>>(
-      "/api/collections/goals/records?perPage=200"
-    );
+    // no-store so monthly contribution edits reflect immediately on router.refresh()
+    const res = await fetch(`${BASE}/api/collections/goals/records?perPage=200`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PbListResponse<PbGoal>;
     return (data.items ?? []).map((item) => ({
       id: item.id,
       name: item.name ?? "",
@@ -405,25 +559,16 @@ interface PbStatement {
   category?: string | null;
   account?: string | null;
   sourceFile?: string | null;
-   goalId?: string | null;
+  goalId?: string | null;
+  goal_id?: string | null;
 }
 
-/** Fetch statement records from PocketBase. Uses no-store so "Paid this month" and other statement-derived data stay fresh after refresh. */
-export async function getStatements(options?: {
-  account?: string;
-  perPage?: number;
-  sort?: string;
-}): Promise<StatementRecord[]> {
-  if (!POCKETBASE_URL) return [];
-  try {
-    const params = new URLSearchParams();
-    params.set("perPage", String(options?.perPage ?? 500));
-    if (options?.sort) params.set("sort", options.sort);
-    if (options?.account) params.set("filter", `account="${options.account}"`);
-    const res = await fetch(`${BASE}/api/collections/statements/records?${params}`, { cache: "no-store" });
-    if (!res.ok) return [];
-    const data = (await res.json()) as PbListResponse<PbStatement>;
-    return (data.items ?? []).map((item) => ({
+function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
+  return (items ?? []).map((item) => {
+    const raw = item as Record<string, unknown>;
+    const goalIdRaw = raw.goalId ?? raw.goal_id ?? null;
+    const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
+    return {
       id: item.id,
       date: item.date ?? "",
       description: item.description ?? "",
@@ -432,8 +577,45 @@ export async function getStatements(options?: {
       category: item.category ?? null,
       account: item.account ?? null,
       sourceFile: item.sourceFile ?? null,
-      goalId: item.goalId ?? null,
-    }));
+      goalId,
+    };
+  });
+}
+
+/** Fetch statement records from PocketBase. Uses no-store so "Paid this month" and other statement-derived data stay fresh after refresh.
+ *  When admin auth is configured, uses it so goalId is returned and goal progress on the main page updates. */
+export async function getStatements(options?: {
+  account?: string;
+  perPage?: number;
+  sort?: string;
+}): Promise<StatementRecord[]> {
+  if (!POCKETBASE_URL) return [];
+  const params = new URLSearchParams();
+  params.set("perPage", String(options?.perPage ?? 500));
+  if (options?.sort) params.set("sort", options.sort);
+  if (options?.account) params.set("filter", `account="${options.account}"`);
+  const apiBase = POCKETBASE_API_URL || BASE;
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  try {
+    if (apiBase && email && password) {
+      try {
+        const { token, baseUrl } = await getAdminToken(apiBase, email, password);
+        const adminUrl = `${baseUrl.replace(/\/$/, "")}/api/collections/statements/records?${params}`;
+        const res = await fetch(adminUrl, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) {
+          const data = (await res.json()) as PbListResponse<PbStatement>;
+          return mapStatementsResponse(data.items ?? []);
+        }
+      } catch {
+        // fall through to unauthenticated
+      }
+    }
+    const url = `${BASE}/api/collections/statements/records?${params}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PbListResponse<PbStatement>;
+    return mapStatementsResponse(data.items ?? []);
   } catch {
     return [];
   }
@@ -453,25 +635,45 @@ interface PbStatementTagRule {
   overrideCount?: number;
 }
 
-/** Fetch statement tagging rules from PocketBase. Returns [] if URL not set or request fails. */
+function parsePbStatementTagRules(items: PbStatementTagRule[]): StatementTagRule[] {
+  return items.map((item) => ({
+    id: item.id,
+    pattern: item.pattern ?? "",
+    normalizedDescription: item.normalizedDescription ?? null,
+    targetType: (item.targetType as StatementTagTargetType) ?? "ignore",
+    targetSection:
+      (item.targetSection as BillListAccount | "spanish_fork" | null) ?? null,
+    targetName: item.targetName ?? null,
+    goalId: item.goalId ?? null,
+    useCount: item.useCount ?? 0,
+    overrideCount: item.overrideCount ?? 0,
+  }));
+}
+
+/** Fetch statement tagging rules from PocketBase. Returns [] if URL not set or request fails.
+ *  Uses admin auth fallback if the collection requires auth to list. */
 export async function getStatementTagRules(): Promise<StatementTagRule[]> {
   if (!POCKETBASE_URL) return [];
   try {
-    const data = await pbFetch<PbListResponse<PbStatementTagRule>>(
-      "/api/collections/statement_tag_rules/records?perPage=200"
+    // no-store so router.refresh() after saving tags picks up the new rules immediately
+    const res = await fetch(`${BASE}/api/collections/statement_tag_rules/records?perPage=500`, { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as PbListResponse<PbStatementTagRule>;
+      if ((data.items ?? []).length > 0) return parsePbStatementTagRules(data.items);
+    }
+    // Fallback: try with admin auth (collection may require auth to list)
+    const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+    const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+    if (!adminEmail || !adminPassword) return [];
+    const { token, baseUrl } = await getAdminToken(POCKETBASE_API_URL || BASE, adminEmail, adminPassword);
+    const adminBase = baseUrl.replace(/\/$/, "");
+    const adminRes = await fetch(
+      `${adminBase}/api/collections/statement_tag_rules/records?perPage=500`,
+      { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
     );
-    return (data.items ?? []).map((item) => ({
-      id: item.id,
-      pattern: item.pattern ?? "",
-      normalizedDescription: item.normalizedDescription ?? null,
-      targetType: (item.targetType as StatementTagTargetType) ?? "ignore",
-      targetSection:
-        (item.targetSection as BillListAccount | "spanish_fork" | null) ?? null,
-      targetName: item.targetName ?? null,
-      goalId: item.goalId ?? null,
-      useCount: item.useCount ?? 0,
-      overrideCount: item.overrideCount ?? 0,
-    }));
+    if (!adminRes.ok) return [];
+    const data = (await adminRes.json()) as PbListResponse<PbStatementTagRule>;
+    return parsePbStatementTagRules(data.items ?? []);
   } catch {
     return [];
   }
