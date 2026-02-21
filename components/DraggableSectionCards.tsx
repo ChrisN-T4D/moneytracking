@@ -1,9 +1,11 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { Section } from "@/lib/types";
 
 const SECTION_ORDER_KEY = "sectionOrder";
+const LONG_PRESS_MS = 400;
+const MOVE_THRESHOLD_PX = 10;
 
 function getStoredOrder(): string[] {
   if (typeof window === "undefined") return [];
@@ -52,6 +54,13 @@ export function DraggableSectionCards({ sections, children }: DraggableSectionCa
   const [order, setOrder] = useState<string[]>(() => getStoredOrder());
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [isTouchDragging, setIsTouchDragging] = useState(false);
+
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchSourceIdRef = useRef<string | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const dropTargetIdRef = useRef<string | null>(null);
+  dropTargetIdRef.current = dropTargetId;
 
   const childArray = Array.isArray(children) ? [...children] : [children];
   if (childArray.length !== sections.length) {
@@ -63,6 +72,22 @@ export function DraggableSectionCards({ sections, children }: DraggableSectionCa
   useEffect(() => {
     setOrder(getStoredOrder());
   }, [sections.map((s) => s.id).join(",")]);
+
+  const reorder = useCallback(
+    (sourceId: string, targetSectionId: string) => {
+      if (sourceId === targetSectionId) return;
+      const currentOrder = order.length > 0 ? order : sections.map((s) => s.id);
+      const srcIdx = currentOrder.indexOf(sourceId);
+      const tgtIdx = currentOrder.indexOf(targetSectionId);
+      if (srcIdx === -1 || tgtIdx === -1) return;
+      const next = [...currentOrder];
+      next.splice(srcIdx, 1);
+      next.splice(tgtIdx, 0, sourceId);
+      setOrder(next);
+      saveOrder(next);
+    },
+    [order, sections]
+  );
 
   const handleDragStart = useCallback((e: React.DragEvent, sectionId: string) => {
     setDragId(sectionId);
@@ -86,26 +111,82 @@ export function DraggableSectionCards({ sections, children }: DraggableSectionCa
       e.preventDefault();
       setDropTargetId(null);
       const sourceId = e.dataTransfer.getData("application/x-section-id") || e.dataTransfer.getData("text/plain");
-      if (!sourceId || sourceId === targetSectionId) return;
-
-      const currentOrder = order.length > 0 ? order : sections.map((s) => s.id);
-      const srcIdx = currentOrder.indexOf(sourceId);
-      const tgtIdx = currentOrder.indexOf(targetSectionId);
-      if (srcIdx === -1 || tgtIdx === -1) return;
-
-      const next = [...currentOrder];
-      next.splice(srcIdx, 1);
-      next.splice(tgtIdx, 0, sourceId);
-      setOrder(next);
-      saveOrder(next);
+      if (sourceId) reorder(sourceId, targetSectionId);
     },
-    [order, sections]
+    [reorder]
   );
 
   const handleDragEnd = useCallback(() => {
     setDragId(null);
     setDropTargetId(null);
   }, []);
+
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartRef.current = null;
+  }, []);
+
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent, sectionId: string) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+      longPressTimerRef.current = setTimeout(() => {
+        longPressTimerRef.current = null;
+        touchSourceIdRef.current = sectionId;
+        setDragId(sectionId);
+        setIsTouchDragging(true);
+      }, LONG_PRESS_MS);
+    },
+    []
+  );
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || !longPressTimerRef.current) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartRef.current.x;
+    const dy = touch.clientY - touchStartRef.current.y;
+    if (Math.abs(dx) > MOVE_THRESHOLD_PX || Math.abs(dy) > MOVE_THRESHOLD_PX) {
+      clearLongPress();
+    }
+  }, [clearLongPress]);
+
+  useEffect(() => {
+    if (!isTouchDragging) return;
+    const onMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const el = document.elementFromPoint(touch.clientX, touch.clientY);
+      const wrapper = el?.closest?.("[data-section-id]");
+      const id = wrapper?.getAttribute?.("data-section-id");
+      if (id) setDropTargetId(id);
+    };
+    const onEnd = () => {
+      const sourceId = touchSourceIdRef.current;
+      const targetId = dropTargetIdRef.current;
+      if (sourceId && targetId) reorder(sourceId, targetId);
+      touchSourceIdRef.current = null;
+      setDragId(null);
+      setDropTargetId(null);
+      setIsTouchDragging(false);
+    };
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend", onEnd);
+    document.addEventListener("touchcancel", onEnd);
+    return () => {
+      document.removeEventListener("touchmove", onMove);
+      document.removeEventListener("touchend", onEnd);
+      document.removeEventListener("touchcancel", onEnd);
+    };
+  }, [isTouchDragging, reorder]);
+
+  useEffect(() => {
+    return clearLongPress;
+  }, [clearLongPress]);
 
   return (
     <div className="space-y-6">
@@ -118,31 +199,24 @@ export function DraggableSectionCards({ sections, children }: DraggableSectionCa
         return (
           <div
             key={section.id}
+            data-section-id={section.id}
             draggable
             onDragStart={(e) => handleDragStart(e, section.id)}
             onDragOver={(e) => handleDragOver(e, section.id)}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, section.id)}
             onDragEnd={handleDragEnd}
-            className={`relative transition-all ${isDragging ? "opacity-60 scale-[0.98]" : ""} ${
+            onTouchStart={(e) => handleTouchStart(e, section.id)}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={clearLongPress}
+            onTouchCancel={clearLongPress}
+            className={`relative transition-all select-none cursor-grab active:cursor-grabbing touch-manipulation ${isDragging ? "opacity-60 scale-[0.98]" : ""} ${
               isDropTarget ? "ring-2 ring-sky-500 dark:ring-sky-400 ring-offset-2 ring-offset-neutral-100 dark:ring-offset-neutral-900 rounded-xl" : ""
             }`}
+            aria-label="Hold or drag to reorder"
+            title="Hold or drag to reorder"
           >
-            <div
-              className="absolute left-0 top-4 z-10 cursor-grab active:cursor-grabbing touch-none text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 p-1 rounded -translate-x-1"
-              aria-label="Drag to reorder"
-              title="Drag to reorder"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="9" cy="5" r="1.5" />
-                <circle cx="9" cy="12" r="1.5" />
-                <circle cx="9" cy="19" r="1.5" />
-                <circle cx="15" cy="5" r="1.5" />
-                <circle cx="15" cy="12" r="1.5" />
-                <circle cx="15" cy="19" r="1.5" />
-              </svg>
-            </div>
-            <div className="pl-8">{child}</div>
+            {child}
           </div>
         );
       })}
