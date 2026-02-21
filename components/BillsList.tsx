@@ -253,9 +253,9 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
       </div>
 
       <div className="mt-3 overflow-x-auto -mx-4 px-4">
-        <table className="w-full table-fixed text-sm">
+        <table className="w-full min-w-[30rem] table-fixed text-sm">
           <colgroup>
-            <col />{/* Name — takes remaining space */}
+            <col style={{ minWidth: "6rem" }} />{/* Name — gets remaining space, never collapses */}
             <col className="w-10" />{/* Freq badge */}
             <col className="w-20" />{/* Next due */}
             <col className="w-16" />{/* This paycheck? */}
@@ -265,12 +265,12 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
           </colgroup>
           <thead>
             <tr className="border-b border-neutral-200 dark:border-neutral-600 text-left text-xs text-neutral-500 dark:text-neutral-400">
-              <th className="py-2 pr-2 font-medium">Name</th>
+              <th className="py-2 pr-2 font-medium min-w-0">Name</th>
               <th className="py-2 pr-2 font-medium text-center">Freq</th>
-              <th className="py-2 pr-2 font-medium">Due / Last paid</th>
-              <th className="py-2 pr-2 font-medium text-center">Left in paycheck</th>
+              <th className="py-2 pr-2 font-medium whitespace-nowrap">Due / Last paid</th>
+              <th className="py-2 pr-2 font-medium text-center whitespace-nowrap">Left in paycheck</th>
               <th className="py-2 pr-2 font-medium text-right">Amount</th>
-              <th className="py-2 font-medium text-right">Paid this cycle</th>
+              <th className="py-2 font-medium text-right whitespace-nowrap">Paid this cycle</th>
               {canDelete && <th className="py-2 pl-2 w-9 text-right" aria-label="Delete" />}
             </tr>
           </thead>
@@ -286,21 +286,23 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   key={item.id}
                   className="border-b border-neutral-100 dark:border-neutral-700/50 last:border-0"
                 >
-                  <td className="py-2.5 pr-2 text-neutral-800 dark:text-neutral-200">
-                    {canShowBreakdown ? (
-                      <button
-                        type="button"
-                        onClick={() => setBreakdownModal({ name: displayName, items: breakdown })}
-                        className="text-left font-medium hover:text-sky-600 dark:hover:text-sky-400 underline-offset-2 hover:underline"
-                        title="View transactions for this subsection"
-                      >
-                        {displayName}
-                      </button>
-                    ) : (
-                      displayName
-                    )}
+                  <td className="py-2.5 pr-2 text-neutral-800 dark:text-neutral-200 min-w-0" title={displayName}>
+                    <span className="block min-w-0 truncate">
+                      {canShowBreakdown ? (
+                        <button
+                          type="button"
+                          onClick={() => setBreakdownModal({ name: displayName, items: breakdown })}
+                          className="text-left font-medium hover:text-sky-600 dark:hover:text-sky-400 underline-offset-2 hover:underline truncate block min-w-0 w-full"
+                          title="View transactions for this subsection"
+                        >
+                          {displayName}
+                        </button>
+                      ) : (
+                        displayName
+                      )}
+                    </span>
                   </td>
-                  <td className="py-2.5 pr-2 text-neutral-600 dark:text-neutral-400 text-center">
+                  <td className="py-2.5 pr-2 text-neutral-600 dark:text-neutral-400 text-center shrink-0">
                     {canDelete && !isGroupedBillId(item.id) ? (
                       <button
                         type="button"
