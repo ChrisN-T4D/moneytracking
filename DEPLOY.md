@@ -163,3 +163,4 @@ If the app still shows old code after **Pull and redeploy**:
 - **PocketBase** is separate. The app only needs `NEXT_PUBLIC_POCKETBASE_URL` pointing to your PocketBase instance (same server or elsewhere). No need to run PocketBase in this stack unless you want to.
 - **Port 3002** avoids conflicts with other apps. Change the host port in `docker-compose.yml` (e.g. `"8080:3000"`) if you prefer.
 - **HTTPS:** Put the app behind a reverse proxy (Traefik, Caddy, Nginx) on the same server and terminate SSL there.
+- **Never commit real domains or URLs:** Keep `docker-compose.yml` and docs using only env vars or placeholders (e.g. `your-domain.com`). If you ever committed a real address, see [SECURITY.md](SECURITY.md) — "Scrubbing addresses or secrets from git history" for how to remove it from all commits with BFG or git filter-repo, then force-push.

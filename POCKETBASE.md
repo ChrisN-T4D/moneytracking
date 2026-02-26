@@ -7,9 +7,9 @@ Set `NEXT_PUBLIC_POCKETBASE_URL` in `.env.local` (e.g. `https://your-instance.po
 You can create all collections and seed them with default data **from the website** so you don’t have to add anything in the PocketBase admin.
 
 1. In `.env.local` set:
-   - `NEXT_PUBLIC_POCKETBASE_URL` (your PocketBase URL, e.g. `https://pbyour-domain.com/_/`)
+   - `NEXT_PUBLIC_POCKETBASE_URL` (your PocketBase URL, e.g. `https://your-instance.pockethost.io` or `https://your-pb.com/_/`)
    - `POCKETBASE_ADMIN_EMAIL` and `POCKETBASE_ADMIN_PASSWORD` (PocketBase admin login)
-   - Optionally `POCKETBASE_API_URL` — if you get **404** on setup, your API may be at the root (e.g. `https://pbyour-domain.com`); set this to that URL and leave `NEXT_PUBLIC_POCKETBASE_URL` as-is for the app
+   - Optionally `POCKETBASE_API_URL` — if you get **404** on setup, your API may be at the root (e.g. `https://your-pb.com`); set this to that URL and leave `NEXT_PUBLIC_POCKETBASE_URL` as-is for the app
    - Optionally `SEED_SECRET` — if set, you must enter this key on the setup page
 2. Restart the dev server, then open **http://localhost:3001/setup**.
 3. Enter the setup key (if you set `SEED_SECRET`) and click **Create collections and seed data**.
