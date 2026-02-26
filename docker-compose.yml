@@ -1,21 +1,18 @@
-# Neu Money Tracking — Portainer stack (Git repo build)
+# Neu Money Tracking — Portainer stack (pull image from GitHub Container Registry)
+# Image is built by GitHub Actions on push to main. Portainer pulls updates with "Pull and redeploy".
 #
 # Set in Portainer stack "Environment variables" (never commit real values):
 #   HOST                          — domain for this app (e.g. your-domain.com)
 #   NEXT_PUBLIC_POCKETBASE_URL    — PocketBase URL
 #   POCKETBASE_ADMIN_EMAIL        — PocketBase admin email
 #   POCKETBASE_ADMIN_PASSWORD     — PocketBase admin password
-#   CACHE_BUST                    — optional; set to 2, 3, … to force a full image rebuild on Pull and redeploy (Portainer CE workaround)
 #
+# If the image is private: add Registry credentials in Portainer (Registries) for ghcr.io.
 # Ensure external network name matches your Traefik network (e.g. traefik_proxy).
 
 services:
   app:
-    build:
-      context: .
-      args:
-        CACHE_BUST: ${CACHE_BUST:-1}
-    image: neu-money-tracking:latest
+    image: ghcr.io/chrisn-t4d/moneytracking:latest
     container_name: neu-money-tracking
     restart: unless-stopped
     # Port only needed for direct access; Traefik routes by hostname
