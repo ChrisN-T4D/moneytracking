@@ -7,6 +7,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 
+# Bump CACHE_BUST in Portainer stack env (e.g. 2, 3…) to force full rebuild when "Re-pull image" isn't available
+ARG CACHE_BUST=1
+RUN echo "Build cache bust: $CACHE_BUST"
 COPY . .
 RUN npm run build
 

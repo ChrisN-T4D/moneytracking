@@ -5,12 +5,16 @@
 #   NEXT_PUBLIC_POCKETBASE_URL    — PocketBase URL
 #   POCKETBASE_ADMIN_EMAIL        — PocketBase admin email
 #   POCKETBASE_ADMIN_PASSWORD     — PocketBase admin password
+#   CACHE_BUST                    — optional; set to 2, 3, … to force a full image rebuild on Pull and redeploy (Portainer CE workaround)
 #
 # Ensure external network name matches your Traefik network (e.g. traefik_proxy).
 
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        CACHE_BUST: ${CACHE_BUST:-1}
     image: neu-money-tracking:latest
     container_name: neu-money-tracking
     restart: unless-stopped
