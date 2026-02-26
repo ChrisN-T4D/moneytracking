@@ -14,6 +14,8 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
+const APP_VERSION = "1.0";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -25,6 +27,9 @@ export default function RootLayout({
         <AuthProvider>
           <ThemeProvider>
             {children}
+            <footer className="fixed bottom-0 left-0 px-3 py-1.5 text-xs text-neutral-400 dark:text-neutral-500 pointer-events-none z-10">
+              v{APP_VERSION}
+            </footer>
           </ThemeProvider>
         </AuthProvider>
       </body>
