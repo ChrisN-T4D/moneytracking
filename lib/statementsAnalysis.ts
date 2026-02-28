@@ -15,7 +15,8 @@ const PAYCHECK_DESCRIPTIONS = [
   /payroll/i,
   /pay\s*con/i,
   /integris\s*health/i,
-  /quest\s*diagnostic/i,
+  /quest\s*diagnos/i, // Quest Diagnostic, Quest Diagnostics, etc.
+  /nwosu/i,          // NWOSU Payroll, Nwosu Payroll Payroll, etc.
 ];
 
 function isPaycheckLike(description: string): boolean {
@@ -84,11 +85,31 @@ export function isTransferDescription(description: string): boolean {
   return false;
 }
 
+/** Parse date string to milliseconds for ordering. Handles YYYY-MM-DD and M/D/YYYY. */
+function parseDateToTime(d: string): number {
+  return new Date(d.trim()).getTime();
+}
+
+/** Return YYYY-MM-DD for the latest date in the list (by actual time), so "last date" is correct regardless of string format. Uses UTC date components so stored ISO dates (UTC midnight) do not shift to the previous day in local time. */
+function latestDateString(dates: string[]): string {
+  if (dates.length === 0) return "";
+  const withTime = dates.map((d) => ({ str: d.trim(), t: parseDateToTime(d) }));
+  withTime.sort((a, b) => a.t - b.t);
+  const last = withTime[withTime.length - 1]!;
+  if (Number.isNaN(last.t)) return last.str;
+  const date = new Date(last.t);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function inferFrequency(dates: string[]): "biweekly" | "monthly" | "monthlyLastWorkingDay" {
   if (dates.length < 2) return "biweekly";
-  const parsed = dates.map((d) => new Date(d).getTime()).sort((a, b) => a - b);
+  const parsed = dates.map((d) => parseDateToTime(d)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b);
+  if (parsed.length < 2) return "biweekly";
   const gaps: number[] = [];
-  for (let i = 1; i < parsed.length; i++) gaps.push((parsed[i] - parsed[i - 1]) / (24 * 60 * 60 * 1000));
+  for (let i = 1; i < parsed.length; i++) gaps.push((parsed[i]! - parsed[i - 1]!) / (24 * 60 * 60 * 1000));
   const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
   if (avgGap >= 25 && avgGap <= 32) return "monthly";
   if (avgGap >= 28 && avgGap <= 31) return "monthlyLastWorkingDay";
@@ -99,7 +120,7 @@ function inferPaycheckName(description: string): string {
   if (/gusto/i.test(description)) return "Gusto Payroll";
   if (/integris\s*health/i.test(description)) return "Integris Health";
   if (/pershing/i.test(description)) return "Pershing (Brokerage)";
-  if (/quest\s*diagnostic/i.test(description)) return "Quest Diagnostic (Deposit)";
+  if (/quest\s*diagnos/i.test(description)) return "Quest Diagnostic (Deposit)";
   if (/direct\s*dep|dir\s*dep/i.test(description)) return "Direct Deposit";
   return description.slice(0, 40).trim() || "Paycheck";
 }
@@ -138,22 +159,40 @@ export interface SuggestedBill {
   suggestedGroup?: BillSuggestedGroup;
 }
 
+/** Get YYYY-MM from a statement date string so month comparison is timezone-safe. */
+function statementYearMonth(dateStr: string): { y: number; m: number } | null {
+  const s = (dateStr ?? "").trim();
+  if (!s) return null;
+  // ISO or "YYYY-MM-DD ..." (e.g. 2025-03-12 or 2025-03-12T00:00:00.000Z)
+  if (s.length >= 7 && s[4] === "-" && /\d{4}-\d{2}/.test(s.slice(0, 7))) {
+    const y = parseInt(s.slice(0, 4), 10);
+    const m = parseInt(s.slice(5, 7), 10) - 1;
+    if (!Number.isNaN(y) && !Number.isNaN(m) && m >= 0 && m <= 11) return { y, m };
+  }
+  // Fallback: parse as date (handles MM/DD/YYYY, etc.) and use local calendar month
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return { y: d.getFullYear(), m: d.getMonth() };
+}
+
 /**
  * Sum of paycheck-like deposits for the same calendar month as refDate.
  * Used to show "Paid this month" in the paychecks section.
+ * Uses date-string month when possible so UTC-midnight statement dates count in the correct month.
  */
 export function getPaycheckDepositsThisMonth(
   statements: StatementRecord[],
   refDate: Date
 ): number {
-  const y = refDate.getFullYear();
-  const m = refDate.getMonth();
+  const refY = refDate.getFullYear();
+  const refM = refDate.getMonth();
   let sum = 0;
   for (const s of statements) {
     if (s.amount <= 0) continue;
     if (!isPaycheckLike(s.description)) continue;
-    const d = new Date(s.date);
-    if (d.getFullYear() === y && d.getMonth() === m) sum += s.amount;
+    const stmt = statementYearMonth(s.date);
+    if (!stmt || stmt.y !== refY || stmt.m !== refM) continue;
+    sum += s.amount;
   }
   return sum;
 }
@@ -180,8 +219,7 @@ export function suggestPaychecksFromStatements(statements: StatementRecord[]): S
     const amount = Math.round((amounts.reduce((a, b) => a + b, 0) / amounts.length) * 100) / 100;
     const dates = rows.map((r) => r.date).filter(Boolean);
     const frequency = inferFrequency(dates);
-    const sortedDates = [...dates].sort();
-    const lastDate = sortedDates[sortedDates.length - 1] ?? "";
+    const lastDate = latestDateString(dates);
     const name = inferPaycheckName(rows[0]!.description);
     suggested.push({
       name,
@@ -194,6 +232,36 @@ export function suggestPaychecksFromStatements(statements: StatementRecord[]): S
   }
 
   return suggested.sort((a, b) => b.count - a.count);
+}
+
+/** Normalize for fuzzy match: lowercase, collapse spaces. */
+function normalizeForMatch(s: string): string {
+  return (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Given statements and a paycheck display name (e.g. from PaycheckConfig.name), return the latest
+ * deposit date that matches this paycheck, or null if none. Uses same grouping as suggestPaychecksFromStatements;
+ * matches when the inferred paycheck name is the same or one contains the other (normalized).
+ */
+export function getLatestPaycheckDateForName(
+  statements: StatementRecord[],
+  paycheckName: string
+): string | null {
+  const deposits = statements.filter((s) => s.amount > 0 && isPaycheckLike(s.description));
+  const searchNorm = normalizeForMatch(paycheckName);
+  if (!searchNorm) return null;
+  const matchingDates: string[] = [];
+  for (const row of deposits) {
+    const inferred = inferPaycheckName(row.description);
+    const inferredNorm = normalizeForMatch(inferred);
+    if (!inferredNorm) continue;
+    if (inferredNorm === searchNorm || inferredNorm.includes(searchNorm) || searchNorm.includes(inferredNorm)) {
+      if (row.date) matchingDates.push(row.date);
+    }
+  }
+  if (matchingDates.length === 0) return null;
+  return latestDateString(matchingDates);
 }
 
 /**
@@ -222,8 +290,8 @@ export function suggestAutoTransfersFromStatements(statements: StatementRecord[]
     if (rows.length < 1) continue;
     const amounts = rows.map((r) => Math.abs(r.amount));
     const amount = Math.round((amounts.reduce((a, b) => a + b, 0) / amounts.length) * 100) / 100;
-    const dates = rows.map((r) => r.date).filter(Boolean).sort();
-    const lastDate = dates[dates.length - 1] ?? "";
+    const dates = rows.map((r) => r.date).filter(Boolean);
+    const lastDate = latestDateString(dates);
     const gapDays = dates.length >= 2
       ? (new Date(dates[dates.length - 1]!).getTime() - new Date(dates[0]!).getTime()) / (24 * 60 * 60 * 1000) / (dates.length - 1)
       : 14;
@@ -333,8 +401,7 @@ export function suggestBillsFromStatements(statements: StatementRecord[]): Sugge
     const amount = Math.round((amounts.reduce((a, b) => a + b, 0) / amounts.length) * 100) / 100;
     const dates = rows.map((r) => r.date).filter(Boolean);
     const frequency = inferBillFrequency(dates);
-    const sortedDates = [...dates].sort();
-    const lastDate = sortedDates[sortedDates.length - 1] ?? "";
+    const lastDate = latestDateString(dates);
     const name = billNameFromDescription(rows[0]!.description);
     const suggestedGroup = suggestBillGroup(name);
     suggested.push({ name, frequency, amount, count: rows.length, lastDate, suggestedGroup });

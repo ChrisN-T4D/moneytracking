@@ -10,7 +10,7 @@ import { isGroupedBillId } from "@/lib/pocketbase";
 import type { ActualBreakdownItem } from "@/lib/statementTagging";
 import { getCardClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
-import { addCycle as addCycleUtil, lastPaidDate, paidCycleStatus as paidCycleStatusUtil } from "@/lib/billCycleUtils";
+import { addCycle as addCycleUtil, lastPaidDate, paidCycleStatus as paidCycleStatusUtil, paidThisAndLastCycle } from "@/lib/billCycleUtils";
 
 interface BillsListProps {
   title: string;
@@ -18,8 +18,12 @@ interface BillsListProps {
   items: BillOrSub[];
   /** Total paid this month for the whole section (shown in header). */
   monthlySpending?: number;
-  /** Sum of budgeted amounts; when set, shown next to paid total for comparison. */
+  /** Sum of budgeted amounts (required amount); when set, shown in header. */
   budgetedTotal?: number;
+  /** Required from this paycheck for this account (shown in header when set). */
+  requiredThisPaycheck?: number;
+  /** Current balance in the account for this list (bills account or checking). Shown as "Current in account". */
+  currentAmountInAccount?: number | null;
   /** Per-bill paid amounts this month, keyed by bill name (case-insensitive lookup). */
   paidByName?: Record<string, number>;
   /** Per-bill list of contributing transactions (for drill-down popup). Key = lowercase bill name. */
@@ -62,7 +66,7 @@ interface EditState {
   error: string | null;
 }
 
-export function BillsList({ title, subtitle, items: initialItems, monthlySpending, budgetedTotal, paidByName = {}, breakdownByName = {}, canDelete = false, paycheckEndDate }: BillsListProps) {
+export function BillsList({ title, subtitle, items: initialItems, monthlySpending, budgetedTotal, requiredThisPaycheck, currentAmountInAccount, paidByName = {}, breakdownByName = {}, canDelete = false, paycheckEndDate }: BillsListProps) {
   const { theme } = useTheme();
   const router = useRouter();
 
@@ -160,9 +164,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
     setItems(sortBills(initialItems));
   }, [initialItems, paidByName, breakdownByName]);
 
-  const budget = budgetedTotal ?? items.reduce((sum, i) => sum + (i.amount ?? 0), 0);
-  const paid = monthlySpending ?? 0;
-  const hasBudget = budget > 0;
+  const requiredAmount = budgetedTotal ?? items.reduce((sum, i) => sum + (i.amount ?? 0), 0);
+  const showHeaderAmounts = requiredAmount > 0 || requiredThisPaycheck != null || currentAmountInAccount != null;
 
   const startEdit = useCallback((item: BillOrSub) => {
     setEdit({ id: item.id, value: String(item.amount ?? ""), saving: false, error: null });
@@ -235,19 +238,23 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
         {deleteError && (
           <p className="text-xs text-red-600 dark:text-red-400 mt-1">{deleteError}</p>
         )}
-        {hasBudget && (
-          <div className="text-right">
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Budget {formatCurrency(budget)}
-              {paid > 0 && (
-                <>
-                  {" · "}
-                  <span className={paid > budget ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}>
-                    {paid > budget ? "over" : "under"} by {formatCurrency(Math.abs(paid - budget))}
-                  </span>
-                </>
-              )}
-            </p>
+        {showHeaderAmounts && (
+          <div className="text-right space-y-0.5">
+            {requiredAmount > 0 && (
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Required amount: <span className="font-medium text-neutral-700 dark:text-neutral-300">{formatCurrency(requiredAmount)}</span>
+              </p>
+            )}
+            {requiredThisPaycheck != null && requiredThisPaycheck > 0 && (
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Required this paycheck: <span className="font-medium text-neutral-700 dark:text-neutral-300">{formatCurrency(requiredThisPaycheck)}</span>
+              </p>
+            )}
+            {currentAmountInAccount != null && (
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Current in account: <span className="font-medium text-neutral-700 dark:text-neutral-300">{formatCurrency(currentAmountInAccount)}</span>
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -260,7 +267,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
             <col className="w-20" />{/* Next due */}
             <col className="w-16" />{/* This paycheck? */}
             <col className="w-24" />{/* Amount */}
-            <col className="w-24" />{/* Paid this month */}
+            <col className="w-20" />{/* Paid this cycle */}
+            <col className="w-20" />{/* Paid last cycle */}
             {canDelete && <col className="w-9" />}
           </colgroup>
           <thead>
@@ -270,7 +278,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
               <th className="py-2 pr-2 font-medium whitespace-nowrap">Due / Last paid</th>
               <th className="py-2 pr-2 font-medium text-center whitespace-nowrap">Left in paycheck</th>
               <th className="py-2 pr-2 font-medium text-right">Amount</th>
-              <th className="py-2 font-medium text-right whitespace-nowrap">Paid this cycle</th>
+              <th className="py-2 pr-2 font-medium text-right whitespace-nowrap">Paid this cycle</th>
+              <th className="py-2 pr-2 font-medium text-right whitespace-nowrap">Paid last cycle</th>
               {canDelete && <th className="py-2 pl-2 w-9 text-right" aria-label="Delete" />}
             </tr>
           </thead>
@@ -400,19 +409,22 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const now = new Date(); now.setHours(0, 0, 0, 0);
                       // Use the actual paycheck end date if available, otherwise fall back to +14 days
                       const paycheckEnd = paycheckEndDate ?? (() => { const d = new Date(now); d.setDate(d.getDate() + 14); return d; })();
-                      // Current cycle window: paycheckEnd - 14 days → paycheckEnd
-                      const paycheckStart = new Date(paycheckEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+                      // "Already paid this cycle" = we have actual payments in this 2-week window (same as "Paid this cycle" column)
+                      const { thisCycle: paidThisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null);
+                      const alreadyPaidThisCycle = paidThisCycle > 0;
 
                       const cycle = paidCycleStatus(item, breakdown, paidAmt);
                       let inPaycheck = false;
-                      if (cycle?.isPaid) {
-                        // Already paid this cycle — never show in "left in paycheck"
+                      if (alreadyPaidThisCycle) {
                         inPaycheck = false;
                       } else if (cycle && !cycle.isPaid) {
-                        // Has payment history but overdue — use nextCycleDate as the due date
                         inPaycheck = cycle.nextCycleDate <= paycheckEnd;
+                      } else if (cycle?.isPaid) {
+                        // Next due is in the future but we haven't paid this cycle — still "in" if due by cycle end (e.g. due Mar 2, we're Mar 13)
+                        const dueBy = cycle.nextCycleDate;
+                        inPaycheck = dueBy <= paycheckEnd;
                       } else if (item.nextDue) {
-                        // No transaction history — due on or before paycheck end (including overdue)
                         inPaycheck = new Date(item.nextDue) <= paycheckEnd;
                       }
                       return inPaycheck ? (
@@ -469,24 +481,42 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     )}
                   </td>
                   <td className="py-2.5 text-right tabular-nums">
-                    {paidAmt !== undefined ? (
-                      canShowBreakdown ? (
+                    {(() => {
+                      const { thisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null);
+                      if (thisCycle <= 0) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
+                      return canShowBreakdown ? (
                         <button
                           type="button"
-                          onClick={() => setBreakdownModal({ name: displayName, items: breakdown })}
-                          className={paidAmt > (item.amount ?? 0) ? "text-amber-600 dark:text-amber-400 font-medium hover:underline underline-offset-2" : "text-emerald-600 dark:text-emerald-400 font-medium hover:underline underline-offset-2"}
-                          title="View transactions for this subsection"
+                          onClick={() => setBreakdownModal({ name: displayName, items: breakdown! })}
+                          className={thisCycle > (item.amount ?? 0) ? "text-amber-600 dark:text-amber-400 font-medium hover:underline underline-offset-2" : "text-emerald-600 dark:text-emerald-400 font-medium hover:underline underline-offset-2"}
+                          title="View transactions"
                         >
-                          {formatCurrency(paidAmt)}
+                          {formatCurrency(thisCycle)}
                         </button>
                       ) : (
-                        <span className={paidAmt > (item.amount ?? 0) ? "text-amber-600 dark:text-amber-400 font-medium" : "text-emerald-600 dark:text-emerald-400 font-medium"}>
-                          {formatCurrency(paidAmt)}
+                        <span className={thisCycle > (item.amount ?? 0) ? "text-amber-600 dark:text-amber-400 font-medium" : "text-emerald-600 dark:text-emerald-400 font-medium"}>
+                          {formatCurrency(thisCycle)}
                         </span>
-                      )
-                    ) : (
-                      <span className="text-neutral-300 dark:text-neutral-600">—</span>
-                    )}
+                      );
+                    })()}
+                  </td>
+                  <td className="py-2.5 text-right tabular-nums">
+                    {(() => {
+                      const { lastCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null);
+                      if (lastCycle <= 0) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
+                      return canShowBreakdown ? (
+                        <button
+                          type="button"
+                          onClick={() => setBreakdownModal({ name: displayName, items: breakdown! })}
+                          className="text-neutral-600 dark:text-neutral-400 font-medium hover:underline underline-offset-2"
+                          title="View transactions"
+                        >
+                          {formatCurrency(lastCycle)}
+                        </button>
+                      ) : (
+                        <span className="text-neutral-600 dark:text-neutral-400 font-medium">{formatCurrency(lastCycle)}</span>
+                      );
+                    })()}
                   </td>
                   {canDelete && (
                     <td className="py-2.5 pl-2 text-right">

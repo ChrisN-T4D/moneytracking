@@ -34,3 +34,41 @@ export function paidCycleStatus(
   const isPaid = nextCycle > today;
   return { isPaid, lastDate: last, nextCycleDate: nextCycle };
 }
+
+/** Format YYYY-MM-DD for a date at local midnight (for comparison with statement dates). */
+function toDateOnly(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Sum amounts in breakdown that fall within the current 2-week cycle (paycheckEnd - 14 days through paycheckEnd)
+ * and the previous cycle (paycheckEnd - 28 days through paycheckEnd - 14 days).
+ * Statement dates are compared as YYYY-MM-DD strings.
+ */
+export function paidThisAndLastCycle(
+  breakdown: ActualBreakdownItem[] | undefined,
+  paycheckEndDate: Date | null
+): { thisCycle: number; lastCycle: number } {
+  const result = { thisCycle: 0, lastCycle: 0 };
+  if (!breakdown?.length || !paycheckEndDate) return result;
+  const end = new Date(paycheckEndDate.getFullYear(), paycheckEndDate.getMonth(), paycheckEndDate.getDate());
+  const thisStart = new Date(end);
+  thisStart.setDate(thisStart.getDate() - 14);
+  const lastStart = new Date(thisStart);
+  lastStart.setDate(lastStart.getDate() - 14);
+  const thisStartStr = toDateOnly(thisStart);
+  const thisEndStr = toDateOnly(end);
+  const lastEnd = new Date(thisStart);
+  lastEnd.setDate(lastEnd.getDate() - 1);
+  const lastStartStr = toDateOnly(lastStart);
+  const lastEndStr = toDateOnly(lastEnd);
+  for (const t of breakdown) {
+    const dateStr = t.date.slice(0, 10);
+    if (dateStr >= thisStartStr && dateStr <= thisEndStr) result.thisCycle += t.amount;
+    else if (dateStr >= lastStartStr && dateStr <= lastEndStr) result.lastCycle += t.amount;
+  }
+  return result;
+}

@@ -48,6 +48,7 @@ export interface NextPaycheckInfo {
   amount: number | null;
   frequency: PaycheckConfig["frequency"];
   anchorDate: string | null;
+  fundingMonthPreference?: PaycheckConfig["fundingMonthPreference"];
   lastEditedBy?: string | null;
   lastEditedAt?: string | null;
 }
@@ -81,6 +82,7 @@ export function getNextPaychecks(
       amount: c.amount ?? null,
       frequency: c.frequency,
       anchorDate: c.anchorDate ?? null,
+      fundingMonthPreference: c.fundingMonthPreference ?? null,
       lastEditedBy: c.lastEditedBy ?? null,
       lastEditedAt: c.lastEditedAt ?? null,
     };

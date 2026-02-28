@@ -89,6 +89,8 @@ export default function StatementsPage() {
   });
   const [billNames, setBillNames] = useState<Record<string, string[]>>({});
   const [wizardOpen, setWizardOpen] = useState(false);
+  /** 1 = Upload, 2 = Paychecks, 3 = Add items */
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
 
   const groupKeyFrom = (section: string, listType: string) =>
     section === "spanish_fork" ? "spanish_fork" : `${section}_${listType}`;
@@ -528,73 +530,220 @@ export default function StatementsPage() {
           </p>
           <div className="mt-2 space-y-2">
             <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-              Tagging wizard (teach the app how to classify statement rows)
+              Import and categorize flow
             </p>
-            {(tagStatus === "error" || tagMessage) && (
-              <p
-                className={`text-xs ${
-                  tagStatus === "error"
-                    ? "text-red-600 dark:text-red-400"
-                    : "text-neutral-600 dark:text-neutral-400"
-                }`}
+            <div className="flex flex-wrap gap-2 mt-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setWizardStep(1);
+                  setWizardOpen(true);
+                }}
+                className="rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-500"
               >
-                {tagMessage}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                setWizardOpen(true);
-                loadTagSuggestions();
-              }}
-              className="rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-500 disabled:opacity-50"
-              disabled={tagStatus === "loading"}
-            >
-              {tagStatus === "loading" ? "Loading rows…" : "Open tagging wizard"}
-            </button>
+                Start wizard (Upload → Paychecks → Add items)
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setWizardStep(3);
+                  setWizardOpen(true);
+                  if (tagSuggestions.length === 0) loadTagSuggestions();
+                }}
+                className="rounded-lg bg-neutral-200 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 px-3 py-1.5 text-xs font-medium hover:bg-neutral-300 dark:hover:bg-neutral-600 disabled:opacity-50"
+                disabled={tagStatus === "loading"}
+              >
+                {tagStatus === "loading" ? "Loading…" : "Open tagging wizard only"}
+              </button>
+            </div>
             {wizardOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
                 <div className="bg-white dark:bg-neutral-900 rounded-xl shadow-xl max-w-3xl w-[95vw] max-h-[80vh] flex flex-col">
                   <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-700 px-4 py-3">
                     <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-                      Tag statement rows
+                      Step {wizardStep} of 3 — {wizardStep === 1 ? "Upload" : wizardStep === 2 ? "Paychecks" : "Add items"}
                     </h2>
-                    <button
-                      type="button"
-                      onClick={() => setWizardOpen(false)}
-                      className="rounded-lg p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                      aria-label="Close"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                  <div className="px-4 py-2 border-b border-neutral-100 dark:border-neutral-800">
-                    {(tagStatus === "error" || tagMessage) && (
-                      <p
-                        className={`text-xs ${
-                          tagStatus === "error"
-                            ? "text-red-600 dark:text-red-400"
-                            : "text-neutral-600 dark:text-neutral-400"
-                        }`}
+                    <div className="flex items-center gap-2">
+                      {wizardStep > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep((s) => (s - 1) as 1 | 2 | 3)}
+                          className="rounded-lg px-3 py-1.5 text-xs font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                        >
+                          Back
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => { setWizardOpen(false); setWizardStep(1); }}
+                        className="rounded-lg p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                        aria-label="Close"
                       >
-                        {tagMessage}
-                      </p>
-                    )}
-                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
-                      Rows are loaded from your <code className="px-1 rounded bg-neutral-200 dark:bg-neutral-700">statements</code> collection.
-                      Adjust type / section / bill name, then save.
-                    </p>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                    {tagSuggestions.length === 0 && tagStatus !== "loading" && (
+                  {wizardStep === 1 && (
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
                       <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                        No rows loaded yet. Click &quot;Open tagging wizard&quot; again if needed.
+                        Upload statement CSV or PDF. Optionally run analyze with no files to use existing statements.
                       </p>
-                    )}
-                    {tagSuggestions.map((row) => {
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (files.length > 0) {
+                            const ok = await runImport();
+                            if (!ok) return;
+                          }
+                          await handleAnalyze();
+                        }}
+                        className="space-y-3"
+                      >
+                        <div>
+                          <label htmlFor="wizard-file" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">CSV or PDF file(s)</label>
+                          <input
+                            key={fileInputKey}
+                            id="wizard-file"
+                            type="file"
+                            accept=".csv,text/csv,application/csv,.pdf,application/pdf"
+                            multiple
+                            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+                            className="mt-1 block w-full text-sm text-neutral-600 dark:text-neutral-400 file:mr-2 file:rounded file:border-0 file:bg-neutral-200 file:px-3 file:py-1.5 file:text-xs dark:file:bg-neutral-700"
+                          />
+                          {files.length > 0 && <p className="mt-1 text-[11px] text-neutral-500">{files.length} file(s) selected</p>}
+                        </div>
+                        <div>
+                          <label htmlFor="wizard-account" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">Account (optional)</label>
+                          <input
+                            id="wizard-account"
+                            type="text"
+                            value={account}
+                            onChange={(e) => setAccount(e.target.value)}
+                            placeholder="e.g. Checking"
+                            className="mt-1 block w-full rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-2 py-1.5 text-sm"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="submit"
+                            disabled={status === "loading" || fillStatus === "loading"}
+                            className="rounded-lg bg-neutral-800 dark:bg-neutral-200 text-white dark:text-neutral-900 px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                          >
+                            {status === "loading" ? "Uploading…" : fillStatus === "loading" ? "Analyzing…" : "Import and analyze"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setWizardStep(2); if (suggestedPaychecks.length === 0) handleAnalyze(); }}
+                            className="rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-500"
+                          >
+                            Next: Paychecks
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+                  {wizardStep === 2 && (
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                        Add paychecks for this month from your statements. Run analyze if you haven’t yet.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleAnalyze()}
+                        disabled={fillStatus === "loading"}
+                        className="rounded-lg bg-neutral-600 dark:bg-neutral-400 text-white dark:text-neutral-900 px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                      >
+                        {fillStatus === "loading" ? "Analyzing…" : "Analyze statements"}
+                      </button>
+                      {fillStatus === "success" && fillMessage && <p className="text-xs text-neutral-600 dark:text-neutral-300">{fillMessage}</p>}
+                      {fillStatus === "error" && fillMessage && <p className="text-xs text-red-600 dark:text-red-400">{fillMessage}</p>}
+                      {suggestedPaychecks.length > 0 && (
+                        <>
+                          <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">Suggested paychecks — select which to add</p>
+                          <ul className="space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
+                            {suggestedPaychecks.map((p, i) => (
+                              <li key={i} className="flex flex-wrap items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedPaycheckIndices.has(i)}
+                                  onChange={() => togglePaycheck(i)}
+                                  className="mt-0.5 rounded border-neutral-400"
+                                />
+                                <span>{p.name} — ${p.amount.toFixed(2)} ({p.count}×, last {p.lastDate})</span>
+                                <select
+                                  value={paycheckFrequencyByIndex[i] ?? (p.frequency === "monthlyLastWorkingDay" || p.frequency === "monthly" ? p.frequency : "biweekly")}
+                                  onChange={(e) => setPaycheckFrequencyByIndex((prev) => ({ ...prev, [i]: e.target.value }))}
+                                  className="rounded border border-neutral-400 bg-white dark:bg-neutral-800 px-2 py-0.5"
+                                >
+                                  <option value="biweekly">Biweekly</option>
+                                  <option value="monthly">Monthly</option>
+                                  <option value="monthlyLastWorkingDay">Monthly (last working day)</option>
+                                </select>
+                              </li>
+                            ))}
+                          </ul>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={handleApplyPaychecks}
+                              disabled={applying}
+                              className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50"
+                            >
+                              {applying ? "Adding…" : `Add ${selectedPaycheckIndices.size} selected paychecks`}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setWizardStep(3); if (tagSuggestions.length === 0) loadTagSuggestions(); }}
+                              className="rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-500"
+                            >
+                              Next: Add items
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      {suggestedPaychecks.length === 0 && fillStatus !== "loading" && (
+                        <button
+                          type="button"
+                          onClick={() => { setWizardStep(3); if (tagSuggestions.length === 0) loadTagSuggestions(); }}
+                          className="rounded-lg bg-sky-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-sky-500"
+                        >
+                          Skip to Add items
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {wizardStep === 3 && (
+                    <>
+                      <div className="px-4 py-2 border-b border-neutral-100 dark:border-neutral-800">
+                        {(tagStatus === "error" || tagMessage) && (
+                          <p className={`text-xs ${tagStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"}`}>
+                            {tagMessage}
+                          </p>
+                        )}
+                        <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
+                          Assign each row to a bill, variable expenses, or ignore. Use &quot;Add items to bills&quot; on the main page for the full modal with single selector.
+                        </p>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                        {tagSuggestions.length === 0 && tagStatus !== "loading" && (
+                          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                            No rows loaded yet. Click &quot;Load rows&quot; or go Back and run analyze.
+                          </p>
+                        )}
+                        {tagSuggestions.length > 0 && tagStatus !== "loading" && (
+                          <button
+                            type="button"
+                            onClick={() => loadTagSuggestions()}
+                            className="mb-2 rounded bg-neutral-200 dark:bg-neutral-700 px-2 py-1 text-[10px]"
+                          >
+                            Reload rows
+                          </button>
+                        )}
+                        {tagSuggestions.map((row) => {
                       const edit = tagEdits[row.id] ?? row.suggestion;
                       const type = edit.targetType;
                       const sect = edit.targetSection;
@@ -718,6 +867,8 @@ export default function StatementsPage() {
                         : `Save ${tagSuggestions.length} tags and update bills`}
                     </button>
                   </div>
+                </>
+                  )}
                 </div>
               </div>
             )}

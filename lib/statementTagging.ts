@@ -384,8 +384,13 @@ export function computeSpentForBillKeysInDateRange(
   });
   const suggestions = suggestTagsForStatements(inRange, rules);
   let sum = 0;
+  const variableKey = VARIABLE_EXPENSES_BILL_KEY.toLowerCase();
   for (const sug of suggestions) {
     if (sug.matchType === "heuristic") continue;
+    if (sug.targetType === "variable_expense") {
+      if (keySet.has(variableKey)) sum += Math.abs(sug.statement.amount);
+      continue;
+    }
     if (
       !["bill", "subscription", "spanish_fork"].includes(sug.targetType) ||
       !sug.targetSection

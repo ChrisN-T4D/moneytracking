@@ -125,6 +125,8 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
       const lastEditedBy = (rawItem.lastEditedBy ?? rawItem.last_edited_by) as string | null | undefined;
       const lastEditedAt = (rawItem.lastEditedAt ?? rawItem.last_edited_at) as string | null | undefined;
       const lastEditedByUserId = (rawItem.lastEditedByUserId ?? rawItem.last_edited_by_user_id) as string | null | undefined;
+      const fundingMonthPreferenceRaw = (rawItem.fundingMonthPreference ?? rawItem.funding_month_preference ?? getByNormalizedKey(rawItem, "fundingMonthPreference")) as string | null | undefined;
+      const fundingMonthPreference = fundingMonthPreferenceRaw === "same_month" || fundingMonthPreferenceRaw === "next_month" || fundingMonthPreferenceRaw === "split" ? fundingMonthPreferenceRaw : null;
       const anchorDateRaw = (rawItem.anchordate ?? rawItem.anchorDate ?? rawItem.anchor_date ?? getByNormalizedKey(rawItem, "anchorDate")) as string | null | undefined;
       const anchorDateStr = anchorDateRaw != null && String(anchorDateRaw).trim() !== "" ? String(anchorDateRaw).trim() : null;
       const anchorDate = anchorDateStr
@@ -146,6 +148,7 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
         amount: item.amount ?? null,
         paidThisMonthYearMonth,
         amountPaidThisMonth,
+        fundingMonthPreference: fundingMonthPreference ?? null,
         lastEditedBy: lastEditedBy ?? null,
         lastEditedAt: lastEditedAt ?? null,
         lastEditedByUserId: lastEditedByUserId ?? null,
@@ -375,6 +378,8 @@ interface PbAutoTransfer {
   account?: string;
   date?: string;
   amount?: number;
+  transferred_this_cycle?: boolean;
+  transferredThisCycle?: boolean;
 }
 
 /** Fetch auto transfers from PocketBase. Returns [] if URL not set or request fails. */
@@ -391,6 +396,7 @@ export async function getAutoTransfers(): Promise<AutoTransfer[]> {
       account: item.account ?? "",
       date: item.date ?? "",
       amount: Number(item.amount) || 0,
+      transferredThisCycle: Boolean(item.transferred_this_cycle ?? item.transferredThisCycle),
     }));
   } catch {
     return [];
@@ -585,11 +591,14 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
     const raw = item as unknown as Record<string, unknown>;
     const goalIdRaw = raw.goalId ?? raw.goal_id ?? null;
     const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
+    const dateRaw = raw.date ?? raw.Date ?? "";
+    const descRaw = raw.description ?? raw.desc ?? raw.Description ?? "";
+    const amountRaw = raw.amount ?? raw.Amount;
     return {
       id: item.id,
-      date: item.date ?? "",
-      description: item.description ?? "",
-      amount: Number(item.amount) || 0,
+      date: typeof dateRaw === "string" ? dateRaw : String(dateRaw ?? ""),
+      description: typeof descRaw === "string" ? descRaw : String(descRaw ?? ""),
+      amount: Number(amountRaw) || 0,
       balance: item.balance != null ? Number(item.balance) : null,
       category: item.category ?? null,
       account: item.account ?? null,

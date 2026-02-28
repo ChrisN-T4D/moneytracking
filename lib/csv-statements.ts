@@ -73,12 +73,23 @@ function isWellsFargoActivityFormat(firstLine: string): boolean {
   return true;
 }
 
-/** Convert MM/DD/YYYY to YYYY-MM-DD for consistent storage. */
-function toIsoDate(s: string): string {
-  const m = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return s;
-  const [, month, day, year] = m;
-  return `${year}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
+/** Convert MM/DD/YYYY or M/D/YY to YYYY-MM-DD for consistent storage. */
+export function toIsoDate(s: string): string {
+  const t = s.trim();
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const [, month, day, year] = m;
+    return `${year}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
+  }
+  const m2 = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (m2) {
+    const [, month, day, yy] = m2;
+    const y = Number.parseInt(yy!, 10);
+    const year = y >= 50 ? 1900 + y : 2000 + y;
+    return `${year}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  return s;
 }
 
 /** Parse Wells Fargo activity CSV (no header). Columns: Date, Amount, *, "", Description. */
@@ -154,7 +165,7 @@ export function parseStatementCsv(
     const category = categoryCol >= 0 ? (cells[categoryCol] ?? "").trim() || undefined : undefined;
 
     rows.push({
-      date: date || "Unknown",
+      date: date ? toIsoDate(date) : "Unknown",
       description: description || "—",
       amount,
       balance,

@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { formatCurrency } from "@/lib/format";
-import { formatDateNoYear, formatDateShort, daysUntil, billingMonthNameForLastWorkingDay } from "@/lib/paycheckDates";
+import { formatDateNoYear, formatDateShort, formatDateStringNoYear, daysUntil, billingMonthNameForLastWorkingDay } from "@/lib/paycheckDates";
 import { getNextPaychecks, type NextPaycheckInfo } from "@/lib/paycheckConfig";
 import type { PaycheckConfig, PaycheckFrequency } from "@/lib/types";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
@@ -28,6 +28,9 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
   const [error, setError] = useState<string | null>(null);
   const [markingReceived, setMarkingReceived] = useState<string | null>(null); // id of row being marked
   const [markError, setMarkError] = useState<Record<string, string>>({});
+  const [dateFromStatementsLoading, setDateFromStatementsLoading] = useState<string | null>(null);
+  const [dateFromStatementsMessage, setDateFromStatementsMessage] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   async function markReceived(p: NextPaycheckInfo) {
     const today = new Date();
@@ -72,13 +75,15 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
     const frequency = ((form.elements.namedItem("frequency") as HTMLSelectElement)?.value ?? editing.frequency) as PaycheckFrequency;
     const anchorDateRaw = (form.elements.namedItem("anchorDate") as HTMLInputElement)?.value?.trim();
     const anchorDate = anchorDateRaw || null;
+    const fundingMonthPreferenceRaw = (form.elements.namedItem("fundingMonthPreference") as HTMLSelectElement)?.value ?? "";
+    const fundingMonthPreference = fundingMonthPreferenceRaw === "same_month" || fundingMonthPreferenceRaw === "next_month" || fundingMonthPreferenceRaw === "split" ? fundingMonthPreferenceRaw : null;
     setSaving(true);
     setError(null);
     try {
       const res = await fetch(`/api/paychecks/${editing.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, amount, frequency, anchorDate }),
+        body: JSON.stringify({ name, amount, frequency, anchorDate, fundingMonthPreference }),
         credentials: "include",
       });
       const data = (await res.json()) as { ok?: boolean; message?: string };
@@ -87,6 +92,7 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
         return;
       }
       setEditing(null);
+      setDateFromStatementsMessage(null);
       router.refresh();
     } catch {
       setError("Update failed.");
@@ -176,19 +182,62 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                           className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-600 dark:bg-neutral-800"
                         />
                       </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const input = document.querySelector<HTMLInputElement>('input[name="anchorDate"]');
-                          if (input) {
-                            const today = new Date();
-                            input.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-                          }
-                        }}
-                        className="text-xs text-sky-600 dark:text-sky-400 underline hover:no-underline"
-                      >
-                        Mark as received today
-                      </button>
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const input = document.querySelector<HTMLInputElement>('input[name="anchorDate"]');
+                            if (input) {
+                              const today = new Date();
+                              input.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+                            }
+                          }}
+                          className="text-xs text-sky-600 dark:text-sky-400 underline hover:no-underline"
+                        >
+                          Mark as received today
+                        </button>
+                        <button
+                          type="button"
+                          disabled={dateFromStatementsLoading === p.id}
+                          onClick={async () => {
+                            setDateFromStatementsLoading(p.id);
+                            setDateFromStatementsMessage(null);
+                            try {
+                              const res = await fetch(`/api/paychecks/${p.id}/date-from-statements`, { credentials: "include" });
+                              const data = (await res.json()) as { ok?: boolean; suggestedAnchorDate?: string | null; message?: string };
+                              if (res.ok && data.suggestedAnchorDate) {
+                                const input = document.querySelector<HTMLInputElement>('input[name="anchorDate"]');
+                                if (input) input.value = data.suggestedAnchorDate;
+                                setDateFromStatementsMessage(`Set to ${data.suggestedAnchorDate} from statements. Save to apply.`);
+                              } else {
+                                setDateFromStatementsMessage(data.message ?? "No matching deposit found.");
+                              }
+                            } catch {
+                              setDateFromStatementsMessage("Failed to fetch.");
+                            } finally {
+                              setDateFromStatementsLoading(null);
+                            }
+                          }}
+                          className="text-xs text-sky-600 dark:text-sky-400 underline hover:no-underline disabled:opacity-50"
+                        >
+                          {dateFromStatementsLoading === p.id ? "Checking…" : "Update date from statements"}
+                        </button>
+                      </div>
+                      {dateFromStatementsMessage && editing?.id === p.id && (
+                        <p className="text-xs text-neutral-600 dark:text-neutral-400">{dateFromStatementsMessage}</p>
+                      )}
+                      <label className="block text-xs text-neutral-500 dark:text-neutral-400">
+                        When pay date splits two months
+                        <select
+                          name="fundingMonthPreference"
+                          defaultValue={p.fundingMonthPreference ?? ""}
+                          className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-600 dark:bg-neutral-800"
+                        >
+                          <option value="">Don&apos;t count in either</option>
+                          <option value="same_month">Count in first month</option>
+                          <option value="next_month">Count in second month</option>
+                        </select>
+                      </label>
                     </div>
                   )}
                   {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
@@ -202,11 +251,39 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setEditing(null); setError(null); }}
+                      onClick={() => { setEditing(null); setError(null); setDateFromStatementsMessage(null); }}
                       className="rounded border border-neutral-300 px-2 py-1 text-xs font-medium dark:border-neutral-600"
                     >
                       Cancel
                     </button>
+                    {!p.id.startsWith("default-") && (
+                      <button
+                        type="button"
+                        disabled={deletingId === p.id}
+                        onClick={async () => {
+                          if (!confirm(`Delete paycheck "${p.name}"? This cannot be undone.`)) return;
+                          setDeletingId(p.id);
+                          setError(null);
+                          try {
+                            const res = await fetch(`/api/paychecks/${p.id}`, { method: "DELETE", credentials: "include" });
+                            const data = (await res.json()) as { ok?: boolean; message?: string };
+                            if (!res.ok) {
+                              setError(data.message ?? "Delete failed.");
+                              return;
+                            }
+                            setEditing(null);
+                            router.refresh();
+                          } catch {
+                            setError("Delete failed.");
+                          } finally {
+                            setDeletingId(null);
+                          }
+                        }}
+                        className="rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-600 dark:border-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+                      >
+                        {deletingId === p.id ? "Deleting…" : "Delete"}
+                      </button>
+                    )}
                   </div>
                 </form>
               ) : (
@@ -285,8 +362,8 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                   </div>
                   {/* Anchor date hint + error */}
                   {p.frequency === "biweekly" && p.anchorDate && (
-                    <p className="text-[10px] text-neutral-400 dark:text-neutral-500 mt-0.5">
-                      Last pay: {p.anchorDate}
+                    <p className="text-[10px] text-neutral-400 dark:text-neutral-500 mt-0.5" title="Edit to correct if wrong">
+                      Last pay: {formatDateStringNoYear(p.anchorDate)}
                     </p>
                   )}
                   {markError[p.id] && (

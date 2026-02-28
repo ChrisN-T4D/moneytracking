@@ -52,13 +52,59 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
   const [resetTagsStatus, setResetTagsStatus] = useState<"idle" | "loading" | "error">("idle");
   const [subsections, setSubsections] = useState<{ bills: string[]; subscriptions: string[] }>({ bills: [], subscriptions: [] });
   const [billNames, setBillNames] = useState<Record<string, string[]>>({});
-  const [goals, setGoals] = useState<Goal[]>([]);
-  /** Row ID currently adding a new subsection (shows input instead of dropdown). */
-  const [addingSubsectionForRowId, setAddingSubsectionForRowId] = useState<string | null>(null);
-  /** New subsection name being typed. */
-  const [newSubsectionName, setNewSubsectionName] = useState("");
-  /** Subsections added this session so they appear in the dropdown for that account. */
   const [customSubsectionsByGroup, setCustomSubsectionsByGroup] = useState<Record<string, string[]>>({});
+  const [goals, setGoals] = useState<Goal[]>([]);
+
+  // Single selector: value is "variable_expense" | "ignore" | "groupKey|name"
+  const GROUP_KEYS = [
+    "bills_account_bills",
+    "bills_account_subscriptions",
+    "checking_account_bills",
+    "checking_account_subscriptions",
+    "spanish_fork",
+  ] as const;
+  const GROUP_LABELS: Record<string, string> = {
+    bills_account_bills: "Bills (Bills Account)",
+    bills_account_subscriptions: "Subscriptions (Bills Account)",
+    checking_account_bills: "Bills (Checking)",
+    checking_account_subscriptions: "Subscriptions (Checking)",
+    spanish_fork: "Spanish Fork",
+  };
+  function editToSelectValue(edit: { targetType: StatementTagTargetType; targetSection: "bills_account" | "checking_account" | "spanish_fork" | null; targetName: string }): string {
+    if (edit.targetType === "variable_expense") return "variable_expense";
+    if (edit.targetType === "ignore") return "ignore";
+    if (edit.targetType === "auto_transfer") return "auto_transfer";
+    if (!edit.targetSection || !edit.targetName) return "ignore";
+    const groupKey =
+      edit.targetSection === "spanish_fork"
+        ? "spanish_fork"
+        : `${edit.targetSection}_${edit.targetType === "subscription" ? "subscriptions" : "bills"}`;
+    return `${groupKey}|${edit.targetName}`;
+  }
+  function selectValueToEdit(value: string): { targetType: StatementTagTargetType; targetSection: "bills_account" | "checking_account" | "spanish_fork" | null; targetName: string } {
+    if (value === "variable_expense")
+      return { targetType: "variable_expense", targetSection: "checking_account", targetName: "Variable expenses" };
+    if (value === "ignore") return { targetType: "ignore", targetSection: null, targetName: "" };
+    if (value === "auto_transfer") return { targetType: "auto_transfer", targetSection: null, targetName: "" };
+    const pipe = value.indexOf("|");
+    if (pipe < 0) return { targetType: "ignore", targetSection: null, targetName: "" };
+    const groupKey = value.slice(0, pipe);
+    const targetName = value.slice(pipe + 1);
+    if (groupKey === "spanish_fork")
+      return { targetType: "spanish_fork", targetSection: "spanish_fork", targetName };
+    const [section, listType] = groupKey === "bills_account_bills"
+      ? ["bills_account", "bill"]
+      : groupKey === "bills_account_subscriptions"
+      ? ["bills_account", "subscription"]
+      : groupKey === "checking_account_bills"
+      ? ["checking_account", "bill"]
+      : ["checking_account", "subscription"];
+    return {
+      targetType: listType as "bill" | "subscription",
+      targetSection: section as "bills_account" | "checking_account",
+      targetName,
+    };
+  }
 
   // Apply session-based suggestions: use tags the user has set so far to guess tags for other rows with the same pattern.
   // Only update state when we actually add new keys so we don't cause an infinite loop (setTagEdits → tagEdits change → effect re-runs).
@@ -191,11 +237,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
 
   /** Save the currently displayed rows (new tags and any changed tags; updates rules so old tag is replaced by new). */
   async function saveVisibleBatch() {
-    if (visibleRows.length === 0) {
+    const nextBatch = newRowsByDate.slice(0, BATCH_SIZE);
+    if (nextBatch.length === 0) {
       setTagMessage("No rows on this page.");
       return;
     }
-    await runSaveBatch(visibleRows);
+    await runSaveBatch(nextBatch);
   }
 
   async function runSaveBatch(toSave: typeof tagSuggestions) {
@@ -311,22 +358,6 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       setSavedIds(new Set(saved));
       totalSaved += batch.length;
       setTagMessage(`Saved ${totalSaved} of ${all.length}…`);
-      // Populate subsection dropdown: add this batch's targetNames to customSubsectionsByGroup
-      setCustomSubsectionsByGroup((prev) => {
-        const next = { ...prev };
-        for (const t of batch) {
-          const edit = tagEdits[t.id] ?? t.suggestion;
-          if (!edit.targetName || !edit.targetSection) continue;
-          if (edit.targetType !== "bill" && edit.targetType !== "subscription" && edit.targetType !== "spanish_fork") continue;
-          const groupKey =
-            edit.targetSection === "spanish_fork"
-              ? "spanish_fork"
-              : `${edit.targetSection}_${edit.targetType === "subscription" ? "subscriptions" : "bills"}`;
-          const list = next[groupKey] ?? [];
-          if (!list.includes(edit.targetName)) next[groupKey] = [...list, edit.targetName];
-        }
-        return next;
-      });
       unsaved = all.filter((row) => !saved.has(row.id));
     }
     setTagStatus("success");
@@ -342,6 +373,10 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
 
   const untaggedRows = tagSuggestions.filter((r) => !r.suggestion.hasMatchedRule);
   const taggedRows = tagSuggestions.filter((r) => r.suggestion.hasMatchedRule);
+  const alreadySavedRows = tagSuggestions.filter((r) => savedIds.has(r.id));
+  const newRowsByDate = tagSuggestions
+    .filter((r) => !savedIds.has(r.id))
+    .sort((a, b) => b.date.localeCompare(a.date));
   const filteredRows = showTagged ? tagSuggestions : untaggedRows;
   const totalPages = filteredRows.length > 0 ? Math.ceil(filteredRows.length / BATCH_SIZE) : 1;
   const currentPage = Math.min(page, totalPages - 1);
@@ -388,21 +423,6 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       setSavedIds((prev) => {
         const next = new Set(prev);
         toAutoTag.forEach((t) => next.add(t.id));
-        return next;
-      });
-      setCustomSubsectionsByGroup((prev) => {
-        const next = { ...prev };
-        for (const t of toAutoTag) {
-          const edit = tagEdits[t.id] ?? t.suggestion;
-          if (!edit.targetName || !edit.targetSection) continue;
-          if (edit.targetType !== "bill" && edit.targetType !== "subscription" && edit.targetType !== "spanish_fork") continue;
-          const groupKey =
-            edit.targetSection === "spanish_fork"
-              ? "spanish_fork"
-              : `${edit.targetSection}_${edit.targetType === "subscription" ? "subscriptions" : "bills"}`;
-          const list = next[groupKey] ?? [];
-          if (!list.includes(edit.targetName)) next[groupKey] = [...list, edit.targetName];
-        }
         return next;
       });
       setTagStatus("success");
@@ -528,21 +548,8 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                 <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {tagSuggestions.length === 0
                     ? "No rows loaded yet."
-                    : `${untaggedRows.length} need categorizing · ${taggedRows.length} already tagged · ${savedIds.size} saved this session`}
+                    : `${newRowsByDate.length} to categorize · ${alreadySavedRows.length} saved this session`}
                 </span>
-                {taggedRows.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => { setShowTagged((v) => !v); setPage(0); }}
-                    className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
-                      showTagged
-                        ? "border-sky-400 bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50"
-                        : "border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-                    }`}
-                  >
-                    {showTagged ? "Hide already tagged" : `Show already tagged (${taggedRows.length})`}
-                  </button>
-                )}
                 {autoTaggableCount > 0 && (
                   <button
                     type="button"
@@ -567,20 +574,25 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
 
             {/* Body - scrollable */}
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
-              {filteredRows.length === 0 && tagStatus !== "loading" && (
+              {tagSuggestions.length === 0 && tagStatus !== "loading" && (
                 <p className="text-sm text-neutral-600 dark:text-neutral-300">
-                  {tagStatus === "success" && tagSuggestions.length === 0
-                    ? 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them.'
-                    : tagStatus === "success" && !showTagged && taggedRows.length > 0
-                    ? `All untagged statements have been categorized. Click "Show already tagged (${taggedRows.length})" to review or change existing tags.`
-                    : tagStatus === "success"
+                  {tagStatus === "success"
                     ? "All done! Every statement has been categorized."
-                    : 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them as bills or subscriptions.'}
+                    : 'Click "Load statement rows" to fetch statement lines from PocketBase and tag them.'}
                 </p>
               )}
               {tagSuggestions.length > 0 && (
-                <div className="space-y-1.5">
-                  {visibleRows.map((row) => {
+                <div className="space-y-4">
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    Assign each row to a bill, variable expenses, or ignore. Save when done.
+                  </p>
+                  {newRowsByDate.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300 mb-2 border-b border-neutral-200 dark:border-neutral-700 pb-1">
+                        New (by date)
+                      </h3>
+                      <div className="space-y-1.5">
+                        {newRowsByDate.map((row) => {
                     const edit = tagEdits[row.id] ?? row.suggestion;
                     const type = edit.targetType;
                     const sect = edit.targetSection;
@@ -632,183 +644,42 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                         )}
                         <div className="flex-shrink-0 flex items-center gap-1 flex-wrap w-full sm:w-auto">
                           <select
-                            className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[72px]"
-                            value={type}
+                            className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[140px] max-w-[220px]"
+                            value={editToSelectValue(edit)}
                             onChange={(e) => {
-                              const nextType = e.target.value as StatementTagTargetType;
+                              const parsed = selectValueToEdit(e.target.value);
                               const wasAutoTagged = edit.wasAutoTagged ?? false;
                               const originalSuggestion = edit.originalSuggestion;
-                              const isVariableExpense = nextType === "variable_expense";
                               setTagEdits((prev) => ({
                                 ...prev,
                                 [row.id]: {
                                   ...edit,
-                                  targetType: nextType,
-                                  targetSection: isVariableExpense ? "checking_account" : edit.targetSection,
-                                  targetName: isVariableExpense ? "Variable expenses" : edit.targetName,
+                                  targetType: parsed.targetType,
+                                  targetSection: parsed.targetSection,
+                                  targetName: parsed.targetName,
                                   wasAutoTagged: wasAutoTagged ? true : undefined,
                                   originalSuggestion: wasAutoTagged && originalSuggestion ? originalSuggestion : undefined,
                                 },
                               }));
                             }}
                           >
-                            <option value="bill">Bill</option>
-                            <option value="subscription">Sub</option>
-                            <option value="spanish_fork">Spanish Fork</option>
                             <option value="variable_expense">Variable expenses</option>
-                            <option value="auto_transfer">Auto</option>
                             <option value="ignore">Ignore</option>
+                            <option value="auto_transfer">Auto transfer</option>
+                            {GROUP_KEYS.map((groupKey) => {
+                              const names = [...new Set([...(billNames[groupKey] ?? []), ...(customSubsectionsByGroup[groupKey] ?? [])])];
+                              if (names.length === 0) return null;
+                              return (
+                                <optgroup key={groupKey} label={GROUP_LABELS[groupKey] ?? groupKey}>
+                                  {names.map((name) => (
+                                    <option key={name} value={`${groupKey}|${name}`}>
+                                      {displayBillName(name)}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              );
+                            })}
                           </select>
-                          {(type === "bill" || type === "subscription" || type === "spanish_fork") && (
-                            <>
-                              <select
-                                className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[90px]"
-                                value={sect ?? "checking_account"}
-                                onChange={(e) => {
-                                  const nextSection = e.target.value as
-                                    | "bills_account"
-                                    | "checking_account"
-                                    | "spanish_fork";
-                                  const wasAutoTagged = edit.wasAutoTagged ?? false;
-                                  const originalSuggestion = edit.originalSuggestion;
-                                  setTagEdits((prev) => ({
-                                    ...prev,
-                                    [row.id]: {
-                                      ...edit,
-                                      targetSection: nextSection,
-                                      wasAutoTagged: wasAutoTagged ? true : undefined,
-                                      originalSuggestion: wasAutoTagged && originalSuggestion ? originalSuggestion : undefined,
-                                    },
-                                  }));
-                                }}
-                              >
-                                <option value="bills_account">Bills Account</option>
-                                <option value="checking_account">Checking</option>
-                                <option value="spanish_fork">Spanish Fork</option>
-                              </select>
-                              {addingSubsectionForRowId === row.id ? (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  <input
-                                    type="text"
-                                    value={newSubsectionName}
-                                    onChange={(e) => setNewSubsectionName(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.preventDefault();
-                                        const name = newSubsectionName.trim();
-                                        if (name) {
-                                          const groupKey =
-                                            sect === "spanish_fork"
-                                              ? "spanish_fork"
-                                              : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
-                                          setTagEdits((prev) => ({
-                                            ...prev,
-                                            [row.id]: { ...edit, targetName: name },
-                                          }));
-                                          setCustomSubsectionsByGroup((prev) => ({
-                                            ...prev,
-                                            [groupKey]: [...(prev[groupKey] ?? []).filter((n) => n !== name), name],
-                                          }));
-                                          setAddingSubsectionForRowId(null);
-                                          setNewSubsectionName("");
-                                        }
-                                      }
-                                      if (e.key === "Escape") {
-                                        setAddingSubsectionForRowId(null);
-                                        setNewSubsectionName("");
-                                      }
-                                    }}
-                                    placeholder="New subsection name"
-                                    className="text-[10px] rounded border border-sky-400 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[100px] max-w-[160px] text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400"
-                                    autoFocus
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const name = newSubsectionName.trim();
-                                      if (name) {
-                                        const groupKey =
-                                          sect === "spanish_fork"
-                                            ? "spanish_fork"
-                                            : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
-                                        setTagEdits((prev) => ({
-                                          ...prev,
-                                          [row.id]: { ...edit, targetName: name },
-                                        }));
-                                        setCustomSubsectionsByGroup((prev) => ({
-                                          ...prev,
-                                          [groupKey]: [...(prev[groupKey] ?? []).filter((n) => n !== name), name],
-                                        }));
-                                      }
-                                      setAddingSubsectionForRowId(null);
-                                      setNewSubsectionName("");
-                                    }}
-                                    className="text-[10px] rounded bg-sky-600 text-white px-1.5 py-0.5 font-medium hover:bg-sky-500"
-                                  >
-                                    Use
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setAddingSubsectionForRowId(null);
-                                      setNewSubsectionName("");
-                                    }}
-                                    className="text-[10px] text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              ) : (
-                                <select
-                                  className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[120px] max-w-[180px]"
-                                  value={edit.targetName === "" ? "__add_new__" : edit.targetName}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val === "__add_new__") {
-                                      setAddingSubsectionForRowId(row.id);
-                                      setNewSubsectionName("");
-                                      return;
-                                    }
-                                    const wasAutoTagged = edit.wasAutoTagged ?? false;
-                                    const originalSuggestion = edit.originalSuggestion;
-                                    setTagEdits((prev) => ({
-                                      ...prev,
-                                      [row.id]: {
-                                        ...edit,
-                                        targetName: val,
-                                        wasAutoTagged: wasAutoTagged ? true : undefined,
-                                        originalSuggestion: wasAutoTagged && originalSuggestion ? originalSuggestion : undefined,
-                                      },
-                                    }));
-                                  }}
-                                >
-                                  <option value="__add_new__">— Add new subsection —</option>
-                                  {(() => {
-                                    const groupKey =
-                                      sect === "spanish_fork"
-                                        ? "spanish_fork"
-                                        : `${sect}_${type === "subscription" ? "subscriptions" : "bills"}`;
-                                    const namesForAccount = billNames[groupKey] ?? [];
-                                    const custom = customSubsectionsByGroup[groupKey] ?? [];
-                                    const typeSubsections =
-                                      type === "subscription"
-                                        ? subsections.subscriptions
-                                        : subsections.bills;
-                                    const options = namesForAccount.length > 0 ? namesForAccount : typeSubsections;
-                                    const merged = [...new Set([...options, ...custom])];
-                                    const withCurrent = edit.targetName && !merged.includes(edit.targetName)
-                                      ? [edit.targetName, ...merged]
-                                      : merged;
-                                    return withCurrent.map((name) => (
-                                      <option key={name} value={name}>
-                                        {displayBillName(name)}
-                                      </option>
-                                    ));
-                                  })()}
-                                </select>
-                              )}
-                            </>
-                          )}
                           {/* Goal selector - available for all statement types */}
                           <select
                             className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[100px] max-w-[150px]"
@@ -838,6 +709,85 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                       </div>
                     );
                   })}
+                      </div>
+                    </div>
+                  )}
+                  {alreadySavedRows.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-neutral-600 dark:text-neutral-300 mb-2 border-b border-neutral-200 dark:border-neutral-700 pb-1">
+                        Already saved
+                      </h3>
+                      <div className="space-y-1.5 rounded-lg bg-neutral-50 dark:bg-neutral-900/50 p-2">
+                        {alreadySavedRows.map((row) => {
+                          const edit = tagEdits[row.id] ?? row.suggestion;
+                          const isSaved = true;
+                          const hasMatchedRule = row.suggestion.hasMatchedRule ?? false;
+                          const confidence = row.suggestion.confidence ?? "LOW";
+                          const isHighConfidence = confidence === "HIGH" && row.suggestion.matchType === "exact_pattern";
+                          return (
+                            <div
+                              key={row.id}
+                              className={`flex flex-wrap items-start gap-2 p-2 rounded-lg border border-emerald-200 dark:border-emerald-700 bg-emerald-50/70 dark:bg-emerald-900/30`}
+                            >
+                              <div className="flex-shrink-0 text-[10px] text-neutral-500 dark:text-neutral-400 w-14">
+                                {row.date.slice(5)}
+                              </div>
+                              <div className="flex-1 min-w-[100px] max-w-[420px] text-xs text-neutral-800 dark:text-neutral-200 line-clamp-3 break-words" title={row.description}>
+                                {row.description}
+                              </div>
+                              <div className="flex-shrink-0 text-xs font-medium tabular-nums text-neutral-700 dark:text-neutral-300 w-14 text-right">
+                                {row.amount.toFixed(2)}
+                              </div>
+                              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Saved</span>
+                              <div className="flex-shrink-0 flex items-center gap-1 flex-wrap w-full sm:w-auto">
+                                <select
+                                  className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[140px] max-w-[220px]"
+                                  value={editToSelectValue(edit)}
+                                  onChange={(e) => {
+                                    const parsed = selectValueToEdit(e.target.value);
+                                    setTagEdits((prev) => ({
+                                      ...prev,
+                                      [row.id]: { ...edit, targetType: parsed.targetType, targetSection: parsed.targetSection, targetName: parsed.targetName },
+                                    }));
+                                  }}
+                                >
+                                  <option value="variable_expense">Variable expenses</option>
+                                  <option value="ignore">Ignore</option>
+                                  <option value="auto_transfer">Auto transfer</option>
+                                  {GROUP_KEYS.map((groupKey) => {
+                                    const names = [...new Set([...(billNames[groupKey] ?? []), ...(customSubsectionsByGroup[groupKey] ?? [])])];
+                                    if (names.length === 0) return null;
+                                    return (
+                                      <optgroup key={groupKey} label={GROUP_LABELS[groupKey] ?? groupKey}>
+                                        {names.map((name) => (
+                                          <option key={name} value={`${groupKey}|${name}`}>{displayBillName(name)}</option>
+                                        ))}
+                                      </optgroup>
+                                    );
+                                  })}
+                                </select>
+                                <select
+                                  className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[100px] max-w-[150px]"
+                                  value={edit.goalId ?? ""}
+                                  onChange={(e) =>
+                                    setTagEdits((prev) => ({
+                                      ...prev,
+                                      [row.id]: { ...edit, goalId: e.target.value || null },
+                                    }))
+                                  }
+                                >
+                                  <option value="">No goal</option>
+                                  {goals.map((goal) => (
+                                    <option key={goal.id} value={goal.id}>{goal.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -849,11 +799,11 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                   <button
                     type="button"
                     onClick={() => void saveVisibleBatch()}
-                    disabled={tagStatus === "saving" || visibleRows.length === 0}
+                    disabled={tagStatus === "saving" || newRowsByDate.length === 0}
                     className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
                     title="Save all displayed rows (new tags and tag changes; replaces old tag with new)"
                   >
-                    {tagStatus === "saving" ? "Saving…" : `Save displayed (${visibleRows.length})`}
+                    {tagStatus === "saving" ? "Saving…" : `Save next ${Math.min(BATCH_SIZE, unsavedCount)}`}
                   </button>
                   <button
                     type="button"
@@ -861,30 +811,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                     disabled={tagStatus === "saving" || unsavedCount === 0}
                     className="rounded-lg bg-emerald-700 text-white px-3 py-1.5 text-sm font-medium hover:bg-emerald-600 disabled:opacity-50"
                   >
-                    Save all in batches of {BATCH_SIZE}
+                    Save all ({unsavedCount}) in batches of {BATCH_SIZE}
                   </button>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                    disabled={currentPage === 0}
-                    className="rounded-lg bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-100 px-3 py-1 text-xs font-medium hover:bg-neutral-300 dark:hover:bg-neutral-700 disabled:opacity-50"
-                  >
-                    Prev
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                    disabled={currentPage >= totalPages - 1}
-                    className="rounded-lg bg-sky-600 dark:bg-sky-500 text-white px-3 py-1 text-xs font-medium hover:bg-sky-500 dark:hover:bg-sky-400 disabled:opacity-50"
-                  >
-                    Next
-                  </button>
-                  <span className="whitespace-nowrap">
-                    Showing {pageStart + 1}–{Math.min(pageEnd, tagSuggestions.length)} of {tagSuggestions.length}
-                  </span>
-                </div>
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {unsavedCount} unsaved · {alreadySavedRows.length} saved this session
+                </span>
               </div>
             )}
           </div>

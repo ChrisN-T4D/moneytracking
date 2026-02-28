@@ -276,6 +276,7 @@ export async function createCollections(
         numberField("amount", false),
         textField("paidThisMonthYearMonth", false),
         numberField("amountPaidThisMonth", false),
+        textField("fundingMonthPreference", false),
         textField("lastEditedByUserId", false),
         textField("lastEditedBy", false),
         textField("lastEditedAt", false),

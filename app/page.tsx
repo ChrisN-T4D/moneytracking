@@ -35,14 +35,23 @@ import {
 } from "@/lib/pocketbase";
 import type { BillListAccount, BillListType, Section, Summary, SpanishForkBill, AutoTransfer, MoneyGoal } from "@/lib/types";
 import type { BillOrSubWithMeta } from "@/lib/pocketbase";
-import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule } from "@/lib/statementTagging";
+import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule, computeLastMonthActuals } from "@/lib/statementTagging";
 import { getPaycheckDepositsThisMonth } from "@/lib/statementsAnalysis";
 import {
   predictedNeedByAccountFromPb,
   predictedNeedByAccountFromLists,
   autoTransfersMonthlyByAccount,
+  autoTransferredInSoFarThisMonth,
+  autoTransferredInForMonth,
+  requiredThisPaycheckByAccountFromBills,
+  requiredForPayPeriodEnd,
+  getDisplayMonthDetail,
   expectedPaychecksThisMonthDetail,
   computeMoneyStatus,
+  getNextAutoTransferInByAccount,
+  transferredThisCycleByAccount,
+  type MoneyStatusWithExtras,
+  type MoneyStatusExtras,
 } from "@/lib/summaryCalculations";
 import { getNextDueAndPaycheck, getTodayUTC } from "@/lib/paycheckDates";
 import { getNextBiweeklyPayDate } from "@/lib/paycheckConfig";
@@ -99,7 +108,20 @@ export default async function Home() {
 
   const paycheckConfigs = await getPaychecks();
   const ref = getTodayUTC();
-  const biweeklyEnd = getNextBiweeklyPayDate(paycheckConfigs, ref) ?? undefined;
+  const _rawBiweeklyEnd = getNextBiweeklyPayDate(paycheckConfigs, ref);
+  // If today IS the pay day, the cycle we need to budget for is today→today+14.
+  // Advance by 14 so bills due in the new cycle (today through next pay date) show as "in this paycheck".
+  const biweeklyEnd = (() => {
+    if (!_rawBiweeklyEnd) return undefined;
+    const refMs = ref.getFullYear() * 10000 + (ref.getMonth() + 1) * 100 + ref.getDate();
+    const endMs = _rawBiweeklyEnd.getFullYear() * 10000 + (_rawBiweeklyEnd.getMonth() + 1) * 100 + _rawBiweeklyEnd.getDate();
+    if (endMs === refMs) {
+      const d = new Date(_rawBiweeklyEnd);
+      d.setDate(d.getDate() + 14);
+      return d;
+    }
+    return _rawBiweeklyEnd;
+  })();
 
   const [
     sections,
@@ -235,13 +257,30 @@ export default async function Home() {
     spanishFork: Math.max(0, predictedNeedRaw.spanishFork - tenantRentMonthly),
   };
   const autoTransfersMonthly = autoTransfersMonthlyByAccount(hasPb ? autoTransfersPb : autoTransfers);
-  // Use CURRENT month for money status and left over (so paid/variable data matches).
-  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const { total: paychecksCurrentMonth, payDates } = expectedPaychecksThisMonthDetail(paycheckConfigs, currentMonth);
-  const { total: paychecksNextMonth, payDates: payDatesNextMonth } = expectedPaychecksThisMonthDetail(paycheckConfigs, nextMonth);
-  const forMonthName = currentMonth.toLocaleString("en-US", { month: "long" });
-  const nextMonthName = nextMonth.toLocaleString("en-US", { month: "long" });
+
+  const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const displayDetail = getDisplayMonthDetail(paycheckConfigs, today);
+  const { displayMonth, displayMonthName, displayNextMonth, nextMonthName, payDates, paychecksThisMonth, paychecksDisplayNextMonth } = displayDetail;
+  const forMonthName = displayMonthName;
+
+  const hasStatements = hasPb && statements.length > 0;
+  const actualFromStatementsDisplayMonth = hasStatements
+    ? getPaycheckDepositsThisMonth(statements, new Date(displayMonth.getFullYear(), displayMonth.getMonth(), 15))
+    : 0;
+  const receivedFromPayDates = payDates
+    .filter((p) => {
+      const d = new Date(p.date.getFullYear(), p.date.getMonth(), p.date.getDate());
+      return d <= todayDay;
+    })
+    .reduce((s, p) => s + p.amount, 0);
+  const actualPaychecksDisplayMonth = actualFromStatementsDisplayMonth > 0 ? actualFromStatementsDisplayMonth : receivedFromPayDates;
+  const incomeForDisplayMonth = actualPaychecksDisplayMonth > 0 ? actualPaychecksDisplayMonth : paychecksThisMonth;
+
+  const actualPaychecksNextMonth = hasStatements
+    ? getPaycheckDepositsThisMonth(statements, new Date(displayNextMonth.getFullYear(), displayNextMonth.getMonth(), 15))
+    : null;
+  const incomeNextMonth = actualPaychecksNextMonth ?? 0;
+  const projectedNextMonth = paychecksDisplayNextMonth;
   const totalGoalContributions = goals.reduce((sum, g) => sum + (g.monthlyContribution ?? 0), 0);
   const accountBalances = {
     checking: summary.checkingBalance ?? null,
@@ -254,11 +293,10 @@ export default async function Home() {
     spanishFork: monthlySpendingBySection.get("spanish_fork|bills") ?? 0,
   };
   const variableExpensesThisMonth = paidThisMonthByBill.get(VARIABLE_EXPENSES_BILL_KEY) ?? 0;
-  const moneyStatus = computeMoneyStatus(predictedNeed, autoTransfersMonthly, paychecksCurrentMonth, payDates, forMonthName, totalGoalContributions, accountBalances, paidThisMonthByAccount, variableExpensesThisMonth);
+  const moneyStatus = computeMoneyStatus(predictedNeed, autoTransfersMonthly, paychecksThisMonth, payDates, forMonthName, totalGoalContributions, accountBalances, paidThisMonthByAccount, variableExpensesThisMonth);
 
   // Groceries & Gas: $250 per paycheck; remaining = 250 - spent in current pay period (biweekly)
   const GROCERIES_AND_GAS_PER_PAYCHECK = 250;
-  const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const nextBiweekly = getNextBiweeklyPayDate(paycheckConfigs, today);
   const groceriesAndGasBudget = GROCERIES_AND_GAS_PER_PAYCHECK;
   let groceriesAndGasSpent = 0;
@@ -288,13 +326,179 @@ export default async function Home() {
       (paidThisMonthByBill.get("checking_account|bills|gas") ?? 0) +
       (paidThisMonthByBill.get("checking_account|bills|groceries & gas") ?? 0);
   }
-  const moneyStatusWithExtras = moneyStatus as import("@/lib/summaryCalculations").MoneyStatus & { incomeNextMonth?: number; nextMonthName?: string };
-  moneyStatusWithExtras.subsections = {
-    groceriesAndGas: { budget: groceriesAndGasBudget, spent: groceriesAndGasSpent },
+  // Variable expenses in same pay period (for "Next 2 weeks" block)
+  let variableExpensesThisPaycheck = 0;
+  if (nextBiweekly && hasPb && statements.length > 0 && tagRules.length > 0) {
+    const periodEnd = new Date(nextBiweekly.getFullYear(), nextBiweekly.getMonth(), nextBiweekly.getDate());
+    const periodStart = new Date(periodEnd);
+    periodStart.setDate(periodStart.getDate() - 14);
+    if (todayDay >= periodEnd) {
+      periodStart.setTime(periodEnd.getTime());
+      periodEnd.setDate(periodEnd.getDate() + 14);
+    }
+    variableExpensesThisPaycheck = computeSpentForBillKeysInDateRange(
+      statements,
+      tagRules,
+      periodStart,
+      periodEnd,
+      [VARIABLE_EXPENSES_BILL_KEY]
+    );
+  }
+
+  // Required this 2-week paycheck by account (from bills/subs with inThisPaycheck)
+  const billsWithAccountForPaycheck = hasPb
+    ? billsWithMeta
+    : [
+        ...resolvedBillsAccountBills.map((b) => ({ ...b, account: "bills_account" as const })),
+        ...resolvedBillsAccountSubs.map((b) => ({ ...b, account: "bills_account" as const })),
+        ...resolvedCheckingAccountBills.map((b) => ({ ...b, account: "checking_account" as const })),
+        ...resolvedCheckingAccountSubs.map((b) => ({ ...b, account: "checking_account" as const })),
+      ];
+  const requiredThisPaycheckByAccount = requiredThisPaycheckByAccountFromBills(billsWithAccountForPaycheck, hasPb ? spanishForkPb : resolvedSpanishForkBills);
+  // Actual paid last month by account (from tagged statements)
+  const paidLastMonthByAccount = { bills: 0, checking: 0, spanishFork: 0 };
+  if (hasPb && statements.length > 0 && tagRules.length > 0) {
+    const { rows: lastMonthRows } = computeLastMonthActuals(statements, tagRules, today);
+    for (const row of lastMonthRows) {
+      const amt = row.actualAmount;
+      if (row.section === "bills_account") paidLastMonthByAccount.bills += amt;
+      else if (row.section === "checking_account") paidLastMonthByAccount.checking += amt;
+      else if (row.section === "spanish_fork") paidLastMonthByAccount.spanishFork += amt;
+    }
+  }
+  // Auto transfers that have actually occurred into each account so far this month (schedule-based)
+  const autoTransferredInSoFar = autoTransferredInSoFarThisMonth(hasPb ? autoTransfersPb : autoTransfers, today);
+
+  const displayMonthYearMonth = `${displayMonth.getFullYear()}-${String(displayMonth.getMonth() + 1).padStart(2, "0")}`;
+  const dayOfMonth = today.getDate();
+  const currentCalendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const displayIsNextMonth = displayMonth.getTime() > currentCalendarMonth.getTime();
+  const tableMode: "past_current" | "current_upcoming" =
+    displayIsNextMonth || dayOfMonth <= 15 ? "past_current" : "current_upcoming";
+  const pastMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() - 1, 1);
+  const currentCalendarMonthName = currentCalendarMonth.toLocaleString("en-US", { month: "long" });
+  const leftMonthName = tableMode === "past_current"
+    ? (displayIsNextMonth ? currentCalendarMonthName : pastMonth.toLocaleString("en-US", { month: "long" }))
+    : displayMonthName;
+  const rightMonthName = tableMode === "past_current" ? displayMonthName : nextMonthName;
+  const leftMonthDate = tableMode === "past_current"
+    ? (displayIsNextMonth ? currentCalendarMonth : pastMonth)
+    : displayMonth;
+  const rightMonthDate = tableMode === "past_current" ? displayMonth : displayNextMonth;
+  const transfersForAuto = hasPb ? autoTransfersPb : autoTransfers;
+  const autoInForLeftMonth = autoTransferredInForMonth(transfersForAuto, leftMonthDate.getFullYear(), leftMonthDate.getMonth(), today);
+  const autoInForRightMonth = autoTransferredInForMonth(transfersForAuto, rightMonthDate.getFullYear(), rightMonthDate.getMonth(), today);
+  const { bills: nextBillsInflow, spanishFork: nextSpanishForkInflow } = getNextAutoTransferInByAccount(transfersForAuto, today);
+  const transferredThisCycleBonus = transferredThisCycleByAccount(transfersForAuto, today);
+
+  // Upcoming bills (in this paycheck) for chart display
+  const upcomingBills: { date: string; name: string; amount: number; account?: string }[] = [];
+  for (const b of billsWithAccountForPaycheck) {
+    if (!b.inThisPaycheck || !b.nextDue) continue;
+    upcomingBills.push({
+      date: b.nextDue,
+      name: (b as { name?: string }).name ?? "Bill",
+      amount: b.amount,
+      account: b.account,
+    });
+  }
+  for (const b of (hasPb ? spanishForkPb : resolvedSpanishForkBills)) {
+    if (!b.inThisPaycheck || !b.nextDue) continue;
+    upcomingBills.push({
+      date: b.nextDue,
+      name: (b as { name?: string }).name ?? "SF",
+      amount: b.amount,
+      account: "spanish_fork",
+    });
+  }
+  upcomingBills.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Per-paycheck breakdown for display month (Income vs Needed chart)
+  const spanishForkForPeriod = hasPb ? spanishForkPb : resolvedSpanishForkBills;
+  const requiredByPayDate = payDates.map((p) =>
+    requiredForPayPeriodEnd(billsWithAccountForPaycheck, spanishForkForPeriod, p.date)
+  );
+  const goalSharePerPaycheck = payDates.length > 0 ? totalGoalContributions / payDates.length : totalGoalContributions;
+  const discretionaryByPayDate = payDates.map((p, i) =>
+    Math.max(0, p.amount - (requiredByPayDate[i] ?? 0) - goalSharePerPaycheck)
+  );
+  const nextPayDateIndex = payDates.findIndex((p) => {
+    const d = new Date(p.date.getFullYear(), p.date.getMonth(), p.date.getDate());
+    return d > todayDay;
+  });
+  const paycheckBreakdown = {
+    payDates,
+    requiredByPayDate,
+    discretionaryByPayDate,
+    nextPayDateIndex: nextPayDateIndex >= 0 ? nextPayDateIndex : -1,
+    groceriesBudgetPerPaycheck: GROCERIES_AND_GAS_PER_PAYCHECK,
   };
-  moneyStatusWithExtras.variableExpensesBreakdown = paidBreakdownByBill.get(VARIABLE_EXPENSES_BILL_KEY) ?? [];
-  moneyStatusWithExtras.incomeNextMonth = paychecksNextMonth;
-  moneyStatusWithExtras.nextMonthName = nextMonthName;
+
+  const leftoverPerPaycheck = payDates.length > 0 ? moneyStatus.leftOverComputed / payDates.length : moneyStatus.leftOverComputed;
+  const nextPaycheckEntry = nextPayDateIndex >= 0 ? payDates[nextPayDateIndex] : null;
+  // Extra this paycheck = next paycheck − auto transfers out − bills (checking) − goals share − variable share
+  const variableSharePerPaycheck = payDates.length > 0 ? variableExpensesThisMonth / payDates.length : 0;
+  const extraThisPaycheck =
+    nextPaycheckEntry && requiredThisPaycheckByAccount
+      ? nextPaycheckEntry.amount -
+        (requiredThisPaycheckByAccount.checkingAccount ?? 0) -
+        (nextBillsInflow?.amount ?? 0) -
+        (nextSpanishForkInflow?.amount ?? 0) -
+        goalSharePerPaycheck -
+        variableSharePerPaycheck
+      : undefined;
+
+  // To-date values for running-balance "Current in account" (current calendar month)
+  const currentCalendarMonthForExtras = new Date(today.getFullYear(), today.getMonth(), 1);
+  const { payDates: currentMonthPayDates } = expectedPaychecksThisMonthDetail(paycheckConfigs, currentCalendarMonthForExtras);
+  const paychecksReceivedToDate = currentMonthPayDates
+    .filter((p) => {
+      const d = new Date(p.date.getFullYear(), p.date.getMonth(), p.date.getDate());
+      return d <= todayDay;
+    })
+    .reduce((s, p) => s + p.amount, 0);
+  const groceriesAndGasSpentToDate =
+    (paidThisMonthByBill.get("checking_account|bills|groceries") ?? 0) +
+    (paidThisMonthByBill.get("checking_account|bills|gas") ?? 0) +
+    (paidThisMonthByBill.get("checking_account|bills|groceries & gas") ?? 0);
+
+  const extras: MoneyStatusExtras = {
+    incomeNextMonth,
+    nextMonthName,
+    incomeForDisplayMonth,
+    actualPaychecksDisplayMonth: actualPaychecksDisplayMonth ?? 0,
+    displayMonthYearMonth,
+    projectedNextMonth,
+    variableExpensesThisPaycheck,
+    requiredThisPaycheckByAccount,
+    paidLastMonthByAccount,
+    autoTransferredInSoFar,
+    tableMode,
+    leftMonthName,
+    rightMonthName,
+    autoInForLeftMonth,
+    autoInForRightMonth,
+    paycheckBreakdown,
+    paychecksReceivedToDate,
+    groceriesAndGasSpentToDate,
+    variableExpensesToDate: variableExpensesThisMonth,
+    leftoverPerPaycheck,
+    extraThisPaycheck,
+    nextPaycheckAmount: nextPaycheckEntry?.amount,
+    nextPaycheckDate: nextPaycheckEntry?.date,
+    nextBillsInflow: nextBillsInflow ?? null,
+    nextSpanishForkInflow: nextSpanishForkInflow ?? null,
+    todayDate: today,
+    upcomingBills,
+    autoTransfers: transfersForAuto,
+    transferredThisCycleBonus,
+  };
+  const moneyStatusWithExtras: MoneyStatusWithExtras = {
+    ...moneyStatus,
+    subsections: { groceriesAndGas: { budget: groceriesAndGasBudget, spent: groceriesAndGasSpent } },
+    variableExpensesBreakdown: paidBreakdownByBill.get(VARIABLE_EXPENSES_BILL_KEY) ?? [],
+    ...extras,
+  };
 
   return (
     <AuthenticatedContent>
@@ -374,7 +578,7 @@ function MainContent({
   paidBreakdownByBill: Map<string, import("@/lib/statementTagging").ActualBreakdownItem[]>;
   paycheckPaidThisMonth?: number;
   paycheckConfigs: Awaited<ReturnType<typeof getPaychecks>>;
-  moneyStatus: import("@/lib/summaryCalculations").MoneyStatus;
+  moneyStatus: MoneyStatusWithExtras;
   paycheckEndDate: Date | null;
   spanishForkGrossNeed: number;
   tenantRentMonthly: number | null;
@@ -472,6 +676,9 @@ function MainContent({
                     subtitle={section.subtitle ?? undefined}
                     items={items}
                     monthlySpending={monthlySpending}
+                    budgetedTotal={items.reduce((s, i) => s + (i.amount ?? 0), 0)}
+                    requiredThisPaycheck={section.account === "bills_account" ? moneyStatus.requiredThisPaycheckByAccount?.billsAccount : section.account === "checking_account" ? moneyStatus.requiredThisPaycheckByAccount?.checkingAccount : undefined}
+                    currentAmountInAccount={section.account === "bills_account" ? moneyStatus.accountBalances.bills : moneyStatus.accountBalances.checking}
                     paidByName={paidByName}
                     breakdownByName={breakdownByName}
                     canDelete
@@ -531,6 +738,9 @@ function MainContent({
               subtitle="Oklahoma bills"
               items={billsAccountBills}
               monthlySpending={monthlySpendingBySection.get("bills_account|bills") ?? 0}
+              budgetedTotal={billsAccountBills.reduce((s, i) => s + (i.amount ?? 0), 0)}
+              requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.billsAccount}
+              currentAmountInAccount={_summary?.billsBalance ?? null}
               paidByName={Object.fromEntries(
                 [...paidThisMonthByBill.entries()]
                   .filter(([k]) => k.startsWith("bills_account|bills|"))
@@ -546,6 +756,9 @@ function MainContent({
               title="Subscriptions (Bills Account)"
               items={billsAccountSubs}
               monthlySpending={monthlySpendingBySection.get("bills_account|subscriptions") ?? 0}
+              budgetedTotal={billsAccountSubs.reduce((s, i) => s + (i.amount ?? 0), 0)}
+              requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.billsAccount}
+              currentAmountInAccount={_summary?.billsBalance ?? null}
               paidByName={Object.fromEntries(
                 [...paidThisMonthByBill.entries()]
                   .filter(([k]) => k.startsWith("bills_account|subscriptions|"))
@@ -562,6 +775,9 @@ function MainContent({
               subtitle="Checking bills"
               items={checkingAccountBills}
               monthlySpending={monthlySpendingBySection.get("checking_account|bills") ?? 0}
+              budgetedTotal={checkingAccountBills.reduce((s, i) => s + (i.amount ?? 0), 0)}
+              requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.checkingAccount}
+              currentAmountInAccount={_summary?.checkingBalance ?? null}
               paidByName={Object.fromEntries(
                 [...paidThisMonthByBill.entries()]
                   .filter(([k]) => k.startsWith("checking_account|bills|"))
@@ -577,6 +793,9 @@ function MainContent({
               title="Subscriptions (Checking Account)"
               items={checkingAccountSubs}
               monthlySpending={monthlySpendingBySection.get("checking_account|subscriptions") ?? 0}
+              budgetedTotal={checkingAccountSubs.reduce((s, i) => s + (i.amount ?? 0), 0)}
+              requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.checkingAccount}
+              currentAmountInAccount={_summary?.checkingBalance ?? null}
               paidByName={Object.fromEntries(
                 [...paidThisMonthByBill.entries()]
                   .filter(([k]) => k.startsWith("checking_account|subscriptions|"))

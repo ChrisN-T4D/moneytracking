@@ -12,6 +12,7 @@ type PaycheckUpdateBody = {
   amount?: number | null;
   paidThisMonthYearMonth?: string | null;
   amountPaidThisMonth?: number | null;
+  fundingMonthPreference?: "same_month" | "next_month" | "split" | null | "";
 };
 
 export async function PATCH(
@@ -115,6 +116,12 @@ export async function PATCH(
     const n = body.amountPaidThisMonth === null ? null : Number(body.amountPaidThisMonth);
     if (n === null || (typeof n === "number" && !Number.isNaN(n))) payload[key] = n;
   }
+  if (body.fundingMonthPreference !== undefined) {
+    const key = fieldKey("fundingMonthPreference", "funding_month_preference");
+    const v = body.fundingMonthPreference;
+    if (v === null || v === "" || (typeof v === "string" && v.trim() === "")) payload[key] = null;
+    else if (v === "same_month" || v === "next_month" || v === "split") payload[key] = v;
+  }
 
   // Audit fields
   const userId = getUserIdFromToken(token);
@@ -161,4 +168,63 @@ export async function PATCH(
 
   const data = (await res.json()) as Record<string, unknown>;
   return NextResponse.json({ ok: true, paycheck: data });
+}
+
+/** DELETE /api/paychecks/[id] — delete one paycheck record in PocketBase. */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const base = getPbBase();
+  if (!base) {
+    return NextResponse.json(
+      { ok: false, message: "PocketBase URL not configured." },
+      { status: 500 }
+    );
+  }
+
+  const { id } = await params;
+  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+    return NextResponse.json({ ok: false, message: "Invalid paycheck id." }, { status: 400 });
+  }
+  if (id.startsWith("default-")) {
+    return NextResponse.json({ ok: false, message: "Cannot delete default paycheck." }, { status: 400 });
+  }
+
+  let token: string | null = null;
+  let resolvedBase = base;
+  const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  if (adminEmail && adminPassword) {
+    try {
+      const r = await getAdminToken(base, adminEmail, adminPassword);
+      token = r.token;
+      resolvedBase = r.baseUrl.replace(/\/$/, "");
+    } catch { /* fall through */ }
+  }
+  if (!token) {
+    token = (await getTokenFromCookie().catch(() => null)) ?? null;
+  }
+  if (!token) {
+    return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
+  }
+
+  const url = `${resolvedBase}/api/collections/paychecks/records/${id}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    return NextResponse.json(
+      { ok: false, message: res.status === 403 ? "Not allowed to delete this paycheck." : text },
+      { status: res.status }
+    );
+  }
+
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/");
+  return NextResponse.json({ ok: true });
 }

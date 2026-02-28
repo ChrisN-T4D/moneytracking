@@ -18,6 +18,8 @@ export interface AutoTransfer {
   account: string;
   date: string;
   amount: number;
+  /** True when the transfer has gone through this paycheck/cycle (PB: transferredThisCycle). */
+  transferredThisCycle?: boolean;
 }
 
 export interface SpanishForkBill {
@@ -65,6 +67,8 @@ export interface PaycheckConfig {
   paidThisMonthYearMonth?: string | null;
   /** Amount that counts toward "Paid this month" when paidThisMonthYearMonth matches current month. */
   amountPaidThisMonth?: number | null;
+  /** When a biweekly pay date falls exactly half in two months ("split"), which month to count it in. */
+  fundingMonthPreference?: "same_month" | "next_month" | "split" | null;
   /** User id of who last edited (for audit). */
   lastEditedByUserId?: string | null;
   /** Display name or email of who last edited. */
