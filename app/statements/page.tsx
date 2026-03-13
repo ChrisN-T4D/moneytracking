@@ -71,6 +71,7 @@ export default function StatementsPage() {
     Record<number, { section: "bills_account" | "checking_account" | "spanish_fork"; listType: "bills" | "subscriptions"; frequency: string }>
   >({});
   const [tagSuggestions, setTagSuggestions] = useState<TagSuggestion[]>([]);
+  const [plannedAutoTransfers, setPlannedAutoTransfers] = useState<{ id: string; whatFor: string }[]>([]);
   const [tagEdits, setTagEdits] = useState<
     Record<
       string,
@@ -308,8 +309,9 @@ export default function StatementsPage() {
       console.log("[Tagging wizard] Fetching /api/statement-tags...");
       const res = await fetch("/api/statement-tags");
       console.log("[Tagging wizard] Response status:", res.status, res.ok);
-      const data = (await res.json()) as { ok?: boolean; items?: TagSuggestion[]; message?: string };
+      const data = (await res.json()) as { ok?: boolean; items?: TagSuggestion[]; message?: string; autoTransfers?: { id: string; whatFor: string }[] };
       console.log("[Tagging wizard] Response data:", { ok: data.ok, itemsCount: data.items?.length ?? 0, message: data.message });
+      setPlannedAutoTransfers(data.autoTransfers ?? []);
       if (!res.ok || data.ok === false) {
         setTagStatus("error");
         const msg = data.message ?? `Tagging wizard load failed (${res.status}).`;
@@ -794,6 +796,23 @@ export default function StatementsPage() {
                               <option value="auto_transfer">Auto</option>
                               <option value="ignore">Ignore</option>
                             </select>
+                            {type === "auto_transfer" && (
+                              <select
+                                className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[140px] max-w-[200px]"
+                                value={edit.targetName || ""}
+                                onChange={(e) =>
+                                  setTagEdits((prev) => ({
+                                    ...prev,
+                                    [row.id]: { ...edit, targetSection: null, targetName: e.target.value },
+                                  }))
+                                }
+                              >
+                                <option value="">— Select transfer —</option>
+                                {plannedAutoTransfers.map((t) => (
+                                  <option key={t.id} value={t.whatFor}>{displayBillName(t.whatFor)}</option>
+                                ))}
+                              </select>
+                            )}
                             {type === "income" && (
                               <select
                                 className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[140px] max-w-[200px]"
@@ -809,7 +828,7 @@ export default function StatementsPage() {
                                   }))
                                 }
                               >
-                                {["Quest Diagnostic (Deposit)", "Gusto Payroll", "Direct Deposit", "Integris Health", "Rental management", "Variable income"].map((name) => (
+                                {["Quest Diagnostic (Deposit)", "Gusto Payroll", "Direct Deposit", "Integris Health", "NWOSU Payroll", "Rental management", "Variable income"].map((name) => (
                                   <option key={name} value={name}>{displayBillName(name)}</option>
                                 ))}
                               </select>

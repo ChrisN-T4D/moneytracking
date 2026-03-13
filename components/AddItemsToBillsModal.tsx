@@ -53,6 +53,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
   const [subsections, setSubsections] = useState<{ bills: string[]; subscriptions: string[] }>({ bills: [], subscriptions: [] });
   const [billNames, setBillNames] = useState<Record<string, string[]>>({});
   const [customSubsectionsByGroup, setCustomSubsectionsByGroup] = useState<Record<string, string[]>>({});
+  const [autoTransfers, setAutoTransfers] = useState<{ id: string; whatFor: string }[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
 
   // Single selector: value is "variable_expense" | "ignore" | "groupKey|name"
@@ -70,11 +71,11 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     checking_account_subscriptions: "Subscriptions (Checking)",
     spanish_fork: "Spanish Fork",
   };
-  const INCOME_NAMES = ["Quest Diagnostic (Deposit)", "Gusto Payroll", "Direct Deposit", "Integris Health", "Rental management", "Variable income"];
+  const INCOME_NAMES = ["Quest Diagnostic (Deposit)", "Gusto Payroll", "Direct Deposit", "Integris Health", "NWOSU Payroll", "Rental management", "Variable income"];
   function editToSelectValue(edit: { targetType: StatementTagTargetType; targetSection: "bills_account" | "checking_account" | "spanish_fork" | null; targetName: string }): string {
     if (edit.targetType === "variable_expense") return "variable_expense";
     if (edit.targetType === "ignore") return "ignore";
-    if (edit.targetType === "auto_transfer") return "auto_transfer";
+    if (edit.targetType === "auto_transfer") return edit.targetName ? `auto_transfer|${edit.targetName}` : "auto_transfer";
     if (edit.targetType === "income" && edit.targetName) return `income|${edit.targetName}`;
     if (!edit.targetSection || !edit.targetName) return "ignore";
     const groupKey =
@@ -88,6 +89,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       return { targetType: "variable_expense", targetSection: "checking_account", targetName: "Variable expenses" };
     if (value === "ignore") return { targetType: "ignore", targetSection: null, targetName: "" };
     if (value === "auto_transfer") return { targetType: "auto_transfer", targetSection: null, targetName: "" };
+    if (value.startsWith("auto_transfer|")) return { targetType: "auto_transfer", targetSection: null, targetName: value.slice(14) };
     if (value.startsWith("income|")) return { targetType: "income", targetSection: null, targetName: value.slice(7) };
     const pipe = value.indexOf("|");
     if (pipe < 0) return { targetType: "ignore", targetSection: null, targetName: "" };
@@ -161,7 +163,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     try {
       const res = await fetch("/api/statement-tags", { signal: controller.signal });
       clearTimeout(timeoutId);
-      let data: { ok?: boolean; items?: TagSuggestion[]; message?: string; subsections?: { bills?: string[]; subscriptions?: string[] }; billNames?: Record<string, string[]>; goals?: Goal[] };
+      let data: { ok?: boolean; items?: TagSuggestion[]; message?: string; subsections?: { bills?: string[]; subscriptions?: string[] }; billNames?: Record<string, string[]>; goals?: Goal[]; autoTransfers?: { id: string; whatFor: string }[] };
       try {
         data = (await res.json()) as typeof data;
       } catch {
@@ -178,9 +180,11 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       const subsectionsData = data.subsections ?? { bills: [], subscriptions: [] };
       const billNamesData = data.billNames ?? {};
       const goalsData = data.goals ?? [];
+      const autoTransfersData = data.autoTransfers ?? [];
       setSubsections({ bills: subsectionsData.bills ?? [], subscriptions: subsectionsData.subscriptions ?? [] });
       setBillNames(billNamesData);
       setGoals(goalsData);
+      setAutoTransfers(autoTransfersData);
       if (items.length === 0) {
         setTagStatus("success");
         setTagMessage(data.message ?? "No statement rows found. Import statements first on the Statements page.");
@@ -670,7 +674,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                           >
                             <option value="variable_expense">Variable expenses</option>
                             <option value="ignore">Ignore</option>
-                            <option value="auto_transfer">Auto transfer</option>
+                            <optgroup label="Auto transfer">
+                              <option value="auto_transfer">Auto transfer (unspecified)</option>
+                              {autoTransfers.map((t) => (
+                                <option key={t.id} value={`auto_transfer|${t.whatFor}`}>Auto: {displayBillName(t.whatFor)}</option>
+                              ))}
+                            </optgroup>
                             <optgroup label="Income">
                               {[...new Set([...INCOME_NAMES, ...newRowsByDate.filter((r) => (tagEdits[r.id] ?? r.suggestion).targetType === "income").map((r) => (tagEdits[r.id] ?? r.suggestion).targetName).filter(Boolean)])].map((name) => (
                                 <option key={name} value={`income|${name}`}>Income: {displayBillName(name)}</option>
@@ -763,7 +772,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                                 >
                                   <option value="variable_expense">Variable expenses</option>
                                   <option value="ignore">Ignore</option>
-                                  <option value="auto_transfer">Auto transfer</option>
+                                  <optgroup label="Auto transfer">
+                                    <option value="auto_transfer">Auto transfer (unspecified)</option>
+                                    {autoTransfers.map((t) => (
+                                      <option key={t.id} value={`auto_transfer|${t.whatFor}`}>Auto: {displayBillName(t.whatFor)}</option>
+                                    ))}
+                                  </optgroup>
                                   <optgroup label="Income">
                                     {[...new Set([...INCOME_NAMES, ...tagSuggestions.filter((r) => (tagEdits[r.id] ?? r.suggestion).targetType === "income").map((r) => (tagEdits[r.id] ?? r.suggestion).targetName).filter(Boolean)])].map((name) => (
                                       <option key={name} value={`income|${name}`}>Income: {displayBillName(name)}</option>

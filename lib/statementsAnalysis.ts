@@ -122,9 +122,20 @@ export function inferPaycheckName(description: string): string {
   if (/integris\s*health/i.test(description)) return "Integris Health";
   if (/pershing/i.test(description)) return "Pershing (Brokerage)";
   if (/quest\s*diagnos/i.test(description)) return "Quest Diagnostic (Deposit)";
+  if (/nwosu/i.test(description)) return "NWOSU Payroll";
   if (/direct\s*dep|dir\s*dep/i.test(description)) return "Direct Deposit";
   if (/rental|advantage\s*management|property\s*management/i.test(description)) return "Rental management";
   return description.slice(0, 40).trim() || "Variable income";
+}
+
+/** Infer auto-transfer whatFor from description (for tagging transfer statements). Returns null if no match. */
+export function inferAutoTransferWhatFor(description: string): string | null {
+  const d = (description ?? "").trim();
+  if (!d) return null;
+  for (const { re, whatFor } of [...AUTO_TRANSFER_FROM, ...AUTO_TRANSFER_TO]) {
+    if (re.test(d)) return whatFor;
+  }
+  return null;
 }
 
 export interface SuggestedPaycheck {

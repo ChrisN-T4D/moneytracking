@@ -35,7 +35,7 @@ import {
 } from "@/lib/pocketbase";
 import type { BillListAccount, BillListType, Section, Summary, SpanishForkBill, AutoTransfer, MoneyGoal } from "@/lib/types";
 import type { BillOrSubWithMeta } from "@/lib/pocketbase";
-import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule, computeLastMonthActuals, getIncomeThisMonthFromTags } from "@/lib/statementTagging";
+import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule, computeLastMonthActuals, getIncomeThisMonthFromTags, getVariableIncomeThisMonth } from "@/lib/statementTagging";
 import { getPaycheckDepositsThisMonth } from "@/lib/statementsAnalysis";
 import {
   predictedNeedByAccountFromPb,
@@ -243,6 +243,9 @@ export default async function Home() {
           .reduce((sum, p) => sum + (p.amountPaidThisMonth ?? 0), 0)
       : 0;
   const paycheckPaidThisMonth = fromStatements + fromAddedPaychecks;
+  const incomeThisMonthToDate = paycheckPaidThisMonth;
+  const variableIncomeThisMonth = hasPb && statements.length > 0 && tagRules.length > 0
+    ? getVariableIncomeThisMonth(statements, tagRules, today) : 0;
 
   // Current money status: predicted need by account + auto transfers + paychecks
   const predictedNeedRaw = hasPb
@@ -622,6 +625,8 @@ function MainContent({
           today={today}
           paycheckPaidThisMonth={paycheckPaidThisMonth}
           paycheckConfigs={paycheckConfigs}
+          incomeThisMonthToDate={incomeThisMonthToDate}
+          variableIncomeThisMonth={variableIncomeThisMonth}
         />
 
         {/* GoalsProvider shares goals state between SummaryCard and GoalsSection

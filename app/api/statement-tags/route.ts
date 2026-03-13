@@ -5,6 +5,7 @@ import {
   getBillsWithMeta,
   getSpanishForkBills,
   getGoals,
+  getAutoTransfers,
   normalizeKeyForGrouping,
 } from "@/lib/pocketbase";
 import { getAdminToken } from "@/lib/pocketbase-setup";
@@ -128,12 +129,13 @@ export async function GET() {
     );
   }
   try {
-    const [statements, rules, bills, spanishForkBills, goals] = await Promise.all([
+    const [statements, rules, bills, spanishForkBills, goals, autoTransfers] = await Promise.all([
       getStatementsForTagging(),
       getStatementTagRules(),
       getBillsForTagging(),
       getSpanishForkBills(),
       getGoals(),
+      getAutoTransfers(),
     ]);
 
     // In PocketBase: name = subsection, so extract unique names (subsections) grouped by listType
@@ -244,6 +246,7 @@ export async function GET() {
         subsections: { bills: [], subscriptions: [] },
         billNames: {},
         goals: goals.map((g) => ({ id: g.id, name: g.name })),
+        autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? t.name ?? "" })),
         message: hasAdmin
           ? "No statements found in PocketBase. Import some statements first using the upload form above."
           : "No statements found. Import some statements first. If statements exist but aren't showing, set POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD in .env.local.",
@@ -256,7 +259,6 @@ export async function GET() {
     const needsReview: typeof statements = [];
     const alreadyTagged: typeof statements = [];
     for (const s of statements) {
-      if (isTransferDescription(s.description ?? "")) continue;
       const matched = matchRule(rules, s);
       if (matched && matched.rule.targetType !== "ignore") {
         alreadyTagged.push(s); // already has a rule → show only when user toggles "show tagged"
@@ -311,6 +313,7 @@ export async function GET() {
       subsections: subsectionsByType,
       billNames: billNamesByGroup,
       goals: goals.map((g) => ({ id: g.id, name: g.name })),
+      autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? t.name ?? "" })),
     });
   } catch (e) {
     console.error("GET /api/statement-tags error:", e);

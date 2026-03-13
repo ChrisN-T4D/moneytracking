@@ -22,9 +22,13 @@ interface NextPaychecksCardProps {
   paycheckPaidThisMonth?: number;
   canEdit?: boolean;
   paycheckConfigs?: PaycheckConfig[];
+  /** Total income received this month (used when variable income subsection is shown). */
+  incomeThisMonthToDate?: number;
+  /** When > 0, show "Variable income" subsection with income this month to date. */
+  variableIncomeThisMonth?: number;
 }
 
-export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true, paycheckConfigs }: NextPaychecksCardProps) {
+export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true, paycheckConfigs, incomeThisMonthToDate, variableIncomeThisMonth }: NextPaychecksCardProps) {
   const { theme } = useTheme();
   const router = useRouter();
   const [clientToday] = useState<Date | null>(() =>
@@ -150,6 +154,14 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
           </p>
         </div>
       </div>
+      {variableIncomeThisMonth != null && variableIncomeThisMonth > 0 && (
+        <div className="mb-4 p-3 rounded-lg bg-neutral-100 dark:bg-neutral-700/50 border border-neutral-200 dark:border-neutral-600">
+          <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Variable income — Income this month to date</p>
+          <p className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 tabular-nums mt-0.5">
+            {formatCurrency(incomeThisMonthToDate ?? 0)}
+          </p>
+        </div>
+      )}
       <div className="flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-400 mb-4">
         <span>Today:</span>
         <span className="font-medium text-neutral-800 dark:text-neutral-200">

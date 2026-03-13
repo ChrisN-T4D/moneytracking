@@ -5,7 +5,7 @@ import type {
   BillListAccount,
   BillListType,
 } from "./types";
-import { suggestBillGroup, billNameFromDescription, isTransferDescription, inferPaycheckName } from "./statementsAnalysis";
+import { suggestBillGroup, billNameFromDescription, isTransferDescription, inferPaycheckName, inferAutoTransferWhatFor } from "./statementsAnalysis";
 
 /** One suggestion row for the tagging wizard. */
 export interface StatementTagSuggestion {
@@ -179,6 +179,19 @@ export function suggestTagsForStatements(
       };
     }
 
+    // Transfer descriptions: suggest auto_transfer with matched whatFor when we can infer it
+    if (isTransferDescription(s.description ?? "")) {
+      const whatFor = inferAutoTransferWhatFor(s.description ?? "");
+      return {
+        statement: s,
+        targetType: "auto_transfer" as const,
+        targetSection: null,
+        targetName: whatFor ?? "",
+        confidence: whatFor ? "MEDIUM" : "LOW",
+        matchType: "heuristic",
+      };
+    }
+
     if (s.amount < 0) {
       const name = billNameFromDescription(s.description);
       const group = suggestBillGroup(name);
@@ -237,6 +250,52 @@ export function getIncomeThisMonthFromTags(
     sum += s.amount;
   }
   return sum;
+}
+
+/** Sum of statement amounts tagged as income with targetName "Variable income" for the same calendar month as refDate. */
+export function getVariableIncomeThisMonth(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  refDate: Date
+): number {
+  const refY = refDate.getFullYear();
+  const refM = refDate.getMonth();
+  const variableName = "Variable income";
+  let sum = 0;
+  for (const s of statements) {
+    if (s.amount <= 0) continue;
+    const matched = matchRule(rules, s);
+    if (!matched || matched.rule.targetType !== "income") continue;
+    const name = (matched.rule.targetName ?? "").trim();
+    if (name !== variableName) continue;
+    const d = new Date(s.date);
+    if (Number.isNaN(d.getTime())) continue;
+    if (d.getFullYear() !== refY || d.getMonth() !== refM) continue;
+    sum += s.amount;
+  }
+  return sum;
+}
+
+/** whatFor names of auto transfers that have at least one statement tagged as auto_transfer in the same calendar month as refDate. */
+export function getAutoTransfersMatchedThisCycle(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  refDate: Date
+): string[] {
+  const refY = refDate.getFullYear();
+  const refM = refDate.getMonth();
+  const matched = new Set<string>();
+  for (const s of statements) {
+    const m = matchRule(rules, s);
+    if (!m || m.rule.targetType !== "auto_transfer") continue;
+    const whatFor = (m.rule.targetName ?? "").trim();
+    if (!whatFor) continue;
+    const d = new Date(s.date);
+    if (Number.isNaN(d.getTime())) continue;
+    if (d.getFullYear() !== refY || d.getMonth() !== refM) continue;
+    matched.add(whatFor);
+  }
+  return [...matched];
 }
 
 export interface ActualRow {
