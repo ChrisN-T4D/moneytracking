@@ -35,7 +35,7 @@ import {
 } from "@/lib/pocketbase";
 import type { BillListAccount, BillListType, Section, Summary, SpanishForkBill, AutoTransfer, MoneyGoal } from "@/lib/types";
 import type { BillOrSubWithMeta } from "@/lib/pocketbase";
-import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule, computeLastMonthActuals } from "@/lib/statementTagging";
+import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule, computeLastMonthActuals, getIncomeThisMonthFromTags } from "@/lib/statementTagging";
 import { getPaycheckDepositsThisMonth } from "@/lib/statementsAnalysis";
 import {
   predictedNeedByAccountFromPb,
@@ -223,8 +223,12 @@ export default async function Home() {
   // So in the current month we look for a stored paidThisMonthYearMonth from the *previous* month.
   const prevDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
   const prevYearMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+  const tagIncomeCurrent = hasPb && statements.length > 0 && tagRules.length > 0
+    ? getIncomeThisMonthFromTags(statements, tagRules, today) : 0;
   const fromStatements =
-    hasPb && statements.length > 0 ? getPaycheckDepositsThisMonth(statements, today) : 0;
+    hasPb && statements.length > 0
+      ? (tagIncomeCurrent > 0 ? tagIncomeCurrent : getPaycheckDepositsThisMonth(statements, today))
+      : 0;
   const fromAddedPaychecks =
     hasPb && paycheckConfigs.length > 0
       ? paycheckConfigs
@@ -264,8 +268,11 @@ export default async function Home() {
   const forMonthName = displayMonthName;
 
   const hasStatements = hasPb && statements.length > 0;
+  const displayMonthRef = new Date(displayMonth.getFullYear(), displayMonth.getMonth(), 15);
+  const tagIncomeDisplay = hasStatements && tagRules.length > 0
+    ? getIncomeThisMonthFromTags(statements, tagRules, displayMonthRef) : 0;
   const actualFromStatementsDisplayMonth = hasStatements
-    ? getPaycheckDepositsThisMonth(statements, new Date(displayMonth.getFullYear(), displayMonth.getMonth(), 15))
+    ? (tagIncomeDisplay > 0 ? tagIncomeDisplay : getPaycheckDepositsThisMonth(statements, displayMonthRef))
     : 0;
   const receivedFromPayDates = payDates
     .filter((p) => {
@@ -276,8 +283,11 @@ export default async function Home() {
   const actualPaychecksDisplayMonth = actualFromStatementsDisplayMonth > 0 ? actualFromStatementsDisplayMonth : receivedFromPayDates;
   const incomeForDisplayMonth = actualPaychecksDisplayMonth > 0 ? actualPaychecksDisplayMonth : paychecksThisMonth;
 
+  const nextMonthRef = new Date(displayNextMonth.getFullYear(), displayNextMonth.getMonth(), 15);
+  const tagIncomeNext = hasStatements && tagRules.length > 0
+    ? getIncomeThisMonthFromTags(statements, tagRules, nextMonthRef) : 0;
   const actualPaychecksNextMonth = hasStatements
-    ? getPaycheckDepositsThisMonth(statements, new Date(displayNextMonth.getFullYear(), displayNextMonth.getMonth(), 15))
+    ? (tagIncomeNext > 0 ? tagIncomeNext : getPaycheckDepositsThisMonth(statements, nextMonthRef))
     : null;
   const incomeNextMonth = actualPaychecksNextMonth ?? 0;
   const projectedNextMonth = paychecksDisplayNextMonth;

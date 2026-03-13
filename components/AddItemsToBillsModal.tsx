@@ -70,10 +70,12 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     checking_account_subscriptions: "Subscriptions (Checking)",
     spanish_fork: "Spanish Fork",
   };
+  const INCOME_NAMES = ["Quest Diagnostic (Deposit)", "Gusto Payroll", "Direct Deposit", "Integris Health", "Rental management", "Variable income"];
   function editToSelectValue(edit: { targetType: StatementTagTargetType; targetSection: "bills_account" | "checking_account" | "spanish_fork" | null; targetName: string }): string {
     if (edit.targetType === "variable_expense") return "variable_expense";
     if (edit.targetType === "ignore") return "ignore";
     if (edit.targetType === "auto_transfer") return "auto_transfer";
+    if (edit.targetType === "income" && edit.targetName) return `income|${edit.targetName}`;
     if (!edit.targetSection || !edit.targetName) return "ignore";
     const groupKey =
       edit.targetSection === "spanish_fork"
@@ -86,6 +88,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       return { targetType: "variable_expense", targetSection: "checking_account", targetName: "Variable expenses" };
     if (value === "ignore") return { targetType: "ignore", targetSection: null, targetName: "" };
     if (value === "auto_transfer") return { targetType: "auto_transfer", targetSection: null, targetName: "" };
+    if (value.startsWith("income|")) return { targetType: "income", targetSection: null, targetName: value.slice(7) };
     const pipe = value.indexOf("|");
     if (pipe < 0) return { targetType: "ignore", targetSection: null, targetName: "" };
     const groupKey = value.slice(0, pipe);
@@ -117,7 +120,9 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       > = {};
       for (const row of tagSuggestions) {
         const edit = prev[row.id];
-        if (!edit?.targetType || edit.targetSection == null || !edit.targetName?.trim()) continue;
+        if (!edit?.targetType) continue;
+        if (edit.targetType !== "income" && (edit.targetSection == null || !edit.targetName?.trim())) continue;
+        if (edit.targetType === "income" && !edit.targetName?.trim()) continue;
         const pattern = makeStatementPattern(row.description);
         if (!pattern) continue;
         sessionPatternToTag[pattern] = {
@@ -666,6 +671,11 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                             <option value="variable_expense">Variable expenses</option>
                             <option value="ignore">Ignore</option>
                             <option value="auto_transfer">Auto transfer</option>
+                            <optgroup label="Income">
+                              {[...new Set([...INCOME_NAMES, ...newRowsByDate.filter((r) => (tagEdits[r.id] ?? r.suggestion).targetType === "income").map((r) => (tagEdits[r.id] ?? r.suggestion).targetName).filter(Boolean)])].map((name) => (
+                                <option key={name} value={`income|${name}`}>Income: {displayBillName(name)}</option>
+                              ))}
+                            </optgroup>
                             {GROUP_KEYS.map((groupKey) => {
                               const names = [...new Set([...(billNames[groupKey] ?? []), ...(customSubsectionsByGroup[groupKey] ?? [])])];
                               if (names.length === 0) return null;
@@ -754,6 +764,11 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                                   <option value="variable_expense">Variable expenses</option>
                                   <option value="ignore">Ignore</option>
                                   <option value="auto_transfer">Auto transfer</option>
+                                  <optgroup label="Income">
+                                    {[...new Set([...INCOME_NAMES, ...tagSuggestions.filter((r) => (tagEdits[r.id] ?? r.suggestion).targetType === "income").map((r) => (tagEdits[r.id] ?? r.suggestion).targetName).filter(Boolean)])].map((name) => (
+                                      <option key={name} value={`income|${name}`}>Income: {displayBillName(name)}</option>
+                                    ))}
+                                  </optgroup>
                                   {GROUP_KEYS.map((groupKey) => {
                                     const names = [...new Set([...(billNames[groupKey] ?? []), ...(customSubsectionsByGroup[groupKey] ?? [])])];
                                     if (names.length === 0) return null;

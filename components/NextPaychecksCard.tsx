@@ -1,13 +1,21 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import { formatCurrency } from "@/lib/format";
 import { formatDateNoYear, formatDateShort, formatDateStringNoYear, daysUntil, billingMonthNameForLastWorkingDay } from "@/lib/paycheckDates";
 import { getNextPaychecks, type NextPaycheckInfo } from "@/lib/paycheckConfig";
 import type { PaycheckConfig, PaycheckFrequency } from "@/lib/types";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
+
+interface LinkableStatement {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+}
 
 interface NextPaychecksCardProps {
   today: Date;
@@ -19,29 +27,54 @@ interface NextPaychecksCardProps {
 export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true, paycheckConfigs }: NextPaychecksCardProps) {
   const { theme } = useTheme();
   const router = useRouter();
-  // Initialised eagerly on the client so we always have the user's local "today".
   const [clientToday] = useState<Date | null>(() =>
     typeof window !== "undefined" ? new Date() : null
   );
   const [editing, setEditing] = useState<NextPaycheckInfo | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [markingReceived, setMarkingReceived] = useState<string | null>(null); // id of row being marked
+  const [markReceivedPaycheck, setMarkReceivedPaycheck] = useState<NextPaycheckInfo | null>(null);
+  const [linkableStatements, setLinkableStatements] = useState<LinkableStatement[]>([]);
+  const [linkableLoading, setLinkableLoading] = useState(false);
+  const [linkableError, setLinkableError] = useState<string | null>(null);
+  const [selectedStatementId, setSelectedStatementId] = useState<string | null>(null);
+  const [markingReceived, setMarkingReceived] = useState<string | null>(null);
   const [markError, setMarkError] = useState<Record<string, string>>({});
   const [dateFromStatementsLoading, setDateFromStatementsLoading] = useState<string | null>(null);
   const [dateFromStatementsMessage, setDateFromStatementsMessage] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  async function markReceived(p: NextPaycheckInfo) {
-    const today = new Date();
-    const anchorDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  useEffect(() => {
+    if (!markReceivedPaycheck) return;
+    setLinkableLoading(true);
+    setLinkableError(null);
+    setLinkableStatements([]);
+    setSelectedStatementId(null);
+    fetch(`/api/paychecks/${markReceivedPaycheck.id}/linkable-statements`, { credentials: "include" })
+      .then((res) => res.json())
+      .then((data: { ok?: boolean; statements?: LinkableStatement[]; message?: string }) => {
+        if (data.ok && Array.isArray(data.statements)) setLinkableStatements(data.statements);
+        else setLinkableError(data.message ?? "Could not load statements.");
+      })
+      .catch(() => setLinkableError("Failed to load statements."))
+      .finally(() => setLinkableLoading(false));
+  }, [markReceivedPaycheck]);
+
+  async function markAsReceivedWithStatement(p: NextPaycheckInfo, stmt: LinkableStatement) {
+    const d = new Date(stmt.date);
+    const anchorDate = stmt.date.slice(0, 10);
+    const paidThisMonthYearMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     setMarkingReceived(p.id);
     setMarkError((e) => { const n = { ...e }; delete n[p.id]; return n; });
     try {
       const res = await fetch(`/api/paychecks/${p.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ anchorDate }),
+        body: JSON.stringify({
+          anchorDate,
+          amountPaidThisMonth: stmt.amount,
+          paidThisMonthYearMonth,
+        }),
         credentials: "include",
       });
       const data = (await res.json()) as { ok?: boolean; message?: string };
@@ -49,6 +82,7 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
         setMarkError((e) => ({ ...e, [p.id]: data.message ?? "Save failed" }));
         return;
       }
+      setMarkReceivedPaycheck(null);
       router.refresh();
     } catch {
       setMarkError((e) => ({ ...e, [p.id]: "Save failed" }));
@@ -194,7 +228,7 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                           }}
                           className="text-xs text-sky-600 dark:text-sky-400 underline hover:no-underline"
                         >
-                          Mark as received today
+                          Set to today
                         </button>
                         <button
                           type="button"
@@ -349,14 +383,14 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
                         Edit
                       </button>
                     )}
-                    {canEdit && !p.id.startsWith("default-") && p.frequency === "biweekly" && (
+                    {canEdit && !p.id.startsWith("default-") && (p.frequency === "biweekly" || p.frequency === "monthlyLastWorkingDay" || p.frequency === "monthly") && (
                       <button
                         type="button"
                         disabled={markingReceived === p.id}
-                        onClick={() => void markReceived(p)}
+                        onClick={() => setMarkReceivedPaycheck(p)}
                         className="text-xs text-emerald-600 dark:text-emerald-400 underline hover:no-underline disabled:opacity-50"
                       >
-                        {markingReceived === p.id ? "Saving…" : "Received today"}
+                        Mark as received on
                       </button>
                     )}
                   </div>
@@ -377,6 +411,87 @@ export function NextPaychecksCard({ today, paycheckPaidThisMonth, canEdit = true
           <li className="py-2 text-sm text-neutral-500 dark:text-neutral-400">Loading…</li>
         )}
       </ul>
+
+      {markReceivedPaycheck && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+          onClick={() => setMarkReceivedPaycheck(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mark-received-title"
+        >
+          <div
+            className="bg-white dark:bg-neutral-800 rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-neutral-200 dark:border-neutral-600">
+              <h3 id="mark-received-title" className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                Mark as received on — link to statement
+              </h3>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                {markReceivedPaycheck.name}: select the deposit that is this paycheck.
+              </p>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 min-h-0">
+              {linkableLoading && (
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading statements…</p>
+              )}
+              {linkableError && (
+                <p className="text-sm text-amber-600 dark:text-amber-400">{linkableError}</p>
+              )}
+              {!linkableLoading && !linkableError && linkableStatements.length === 0 && (
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">No recent deposits found. Import statements first.</p>
+              )}
+              {!linkableLoading && linkableStatements.length > 0 && (
+                <ul className="space-y-1">
+                  {linkableStatements.map((stmt) => {
+                    const isSelected = selectedStatementId === stmt.id;
+                    return (
+                      <li key={stmt.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedStatementId(isSelected ? null : stmt.id)}
+                          className={`w-full text-left px-3 py-2 rounded-lg border text-sm ${
+                            isSelected
+                              ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/30 dark:border-emerald-600"
+                              : "border-neutral-200 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
+                          }`}
+                        >
+                          <span className="font-medium tabular-nums text-emerald-700 dark:text-emerald-300">{formatCurrency(stmt.amount)}</span>
+                          <span className="text-neutral-500 dark:text-neutral-400 mx-2">·</span>
+                          <span className="text-neutral-700 dark:text-neutral-300">{stmt.date.slice(0, 10)}</span>
+                          <span className="block text-xs text-neutral-500 dark:text-neutral-400 truncate mt-0.5">{stmt.description}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+            <div className="p-4 border-t border-neutral-200 dark:border-neutral-600 flex justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setMarkReceivedPaycheck(null)}
+                className="px-3 py-1.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedStatementId || markingReceived === markReceivedPaycheck.id}
+                onClick={() => {
+                  const stmt = linkableStatements.find((s) => s.id === selectedStatementId);
+                  if (stmt && markReceivedPaycheck) void markAsReceivedWithStatement(markReceivedPaycheck, stmt);
+                }}
+                className="px-3 py-1.5 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {markingReceived === markReceivedPaycheck.id ? "Saving…" : "Mark as received"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </section>
   );
 }

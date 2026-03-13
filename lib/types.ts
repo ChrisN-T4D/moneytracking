@@ -115,6 +115,7 @@ export type StatementTagTargetType =
   | "spanish_fork"
   | "auto_transfer"
   | "variable_expense"
+  | "income"
   | "ignore";
 
 export type ConfidenceLevel = "HIGH" | "MEDIUM" | "LOW";

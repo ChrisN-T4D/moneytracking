@@ -116,13 +116,15 @@ function inferFrequency(dates: string[]): "biweekly" | "monthly" | "monthlyLastW
   return "biweekly";
 }
 
-function inferPaycheckName(description: string): string {
+/** Infer a display name for a deposit (paycheck, rental, etc.). Exported for income-tag suggestions. */
+export function inferPaycheckName(description: string): string {
   if (/gusto/i.test(description)) return "Gusto Payroll";
   if (/integris\s*health/i.test(description)) return "Integris Health";
   if (/pershing/i.test(description)) return "Pershing (Brokerage)";
   if (/quest\s*diagnos/i.test(description)) return "Quest Diagnostic (Deposit)";
   if (/direct\s*dep|dir\s*dep/i.test(description)) return "Direct Deposit";
-  return description.slice(0, 40).trim() || "Paycheck";
+  if (/rental|advantage\s*management|property\s*management/i.test(description)) return "Rental management";
+  return description.slice(0, 40).trim() || "Variable income";
 }
 
 export interface SuggestedPaycheck {

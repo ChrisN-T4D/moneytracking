@@ -5,7 +5,7 @@ import type {
   BillListAccount,
   BillListType,
 } from "./types";
-import { suggestBillGroup, billNameFromDescription, isTransferDescription } from "./statementsAnalysis";
+import { suggestBillGroup, billNameFromDescription, isTransferDescription, inferPaycheckName } from "./statementsAnalysis";
 
 /** One suggestion row for the tagging wizard. */
 export interface StatementTagSuggestion {
@@ -194,6 +194,19 @@ export function suggestTagsForStatements(
       };
     }
 
+    // Deposits (positive amount): suggest as income with inferred name (Quest, Rental management, Variable income, etc.)
+    if (s.amount > 0) {
+      const name = inferPaycheckName(s.description);
+      return {
+        statement: s,
+        targetType: "income" as const,
+        targetSection: null,
+        targetName: name,
+        confidence: "LOW",
+        matchType: "heuristic",
+      };
+    }
+
     return {
       statement: s,
       targetType: "ignore",
@@ -203,6 +216,27 @@ export function suggestTagsForStatements(
       matchType: "heuristic",
     };
   });
+}
+
+/** Sum of statement amounts tagged as income for the same calendar month as refDate. Used when tag-based income exists; falls back to regex in page. */
+export function getIncomeThisMonthFromTags(
+  statements: StatementRecord[],
+  rules: StatementTagRule[],
+  refDate: Date
+): number {
+  const refY = refDate.getFullYear();
+  const refM = refDate.getMonth();
+  let sum = 0;
+  for (const s of statements) {
+    if (s.amount <= 0) continue;
+    const matched = matchRule(rules, s);
+    if (!matched || matched.rule.targetType !== "income") continue;
+    const d = new Date(s.date);
+    if (Number.isNaN(d.getTime())) continue;
+    if (d.getFullYear() !== refY || d.getMonth() !== refM) continue;
+    sum += s.amount;
+  }
+  return sum;
 }
 
 export interface ActualRow {

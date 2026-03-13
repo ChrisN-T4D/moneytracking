@@ -781,6 +781,8 @@ export default function StatementsPage() {
                                   [row.id]: {
                                     ...edit,
                                     targetType: nextType,
+                                    targetSection: nextType === "income" ? null : edit.targetSection,
+                                    targetName: nextType === "income" && !edit.targetName ? "Variable income" : edit.targetName,
                                   },
                                 }));
                               }}
@@ -788,9 +790,30 @@ export default function StatementsPage() {
                               <option value="bill">Bill</option>
                               <option value="subscription">Sub</option>
                               <option value="spanish_fork">Spanish Fork</option>
+                              <option value="income">Income</option>
                               <option value="auto_transfer">Auto</option>
                               <option value="ignore">Ignore</option>
                             </select>
+                            {type === "income" && (
+                              <select
+                                className="text-[10px] rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-1.5 py-0.5 min-w-[140px] max-w-[200px]"
+                                value={edit.targetName || "Variable income"}
+                                onChange={(e) =>
+                                  setTagEdits((prev) => ({
+                                    ...prev,
+                                    [row.id]: {
+                                      ...edit,
+                                      targetSection: null,
+                                      targetName: e.target.value,
+                                    },
+                                  }))
+                                }
+                              >
+                                {["Quest Diagnostic (Deposit)", "Gusto Payroll", "Direct Deposit", "Integris Health", "Rental management", "Variable income"].map((name) => (
+                                  <option key={name} value={name}>{displayBillName(name)}</option>
+                                ))}
+                              </select>
+                            )}
                             {(type === "bill" || type === "subscription" || type === "spanish_fork") && (
                               <>
                                 <select
