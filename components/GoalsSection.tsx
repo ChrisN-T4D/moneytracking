@@ -7,9 +7,16 @@ import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
 import { useGoals } from "./GoalsContext";
 
+function formatDateShort(dateStr: string): string {
+  const d = dateStr.slice(0, 10);
+  const [y, m, day] = d.split("-");
+  return `${Number(m)}/${Number(day)}/${y.slice(2)}`;
+}
+
 export function GoalsSection() {
   const { theme } = useTheme();
-  const { goals, setGoals, updateGoalContribution } = useGoals();
+  const { goals, setGoals, updateGoalContribution, goalStatementsById } = useGoals();
+  const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
   const [category, setCategory] = useState("");
@@ -218,9 +225,20 @@ export function GoalsSection() {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                      {g.name}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                        {g.name}
+                      </p>
+                      {(goalStatementsById.get(g.id)?.length ?? 0) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setExpandedGoalId(expandedGoalId === g.id ? null : g.id)}
+                          className="text-[11px] text-sky-600 dark:text-sky-400 hover:underline"
+                        >
+                          {expandedGoalId === g.id ? "Hide transactions" : "View transactions"}
+                        </button>
+                      )}
+                    </div>
                     {g.category && (
                       <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                         {g.category}
@@ -289,6 +307,28 @@ export function GoalsSection() {
                     Target by {g.targetDate}
                   </p>
                 )}
+                {expandedGoalId === g.id && (() => {
+                  const txns = goalStatementsById.get(g.id) ?? [];
+                  const sorted = [...txns].sort((a, b) => b.date.localeCompare(a.date));
+                  if (sorted.length === 0) return null;
+                  return (
+                    <div className="mt-2 pt-2 border-t border-neutral-200 dark:border-neutral-700">
+                      <p className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400 mb-1.5">Transactions</p>
+                      <ul className="space-y-1 max-h-48 overflow-y-auto text-[11px]">
+                        {sorted.map((t) => (
+                          <li key={t.id} className="flex justify-between gap-2 text-neutral-700 dark:text-neutral-300">
+                            <span className="shrink-0 text-neutral-500 dark:text-neutral-400">{formatDateShort(t.date)}</span>
+                            <span className="min-w-0 truncate" title={t.description}>{t.description}</span>
+                            <span className="shrink-0 tabular-nums font-medium">{formatCurrency(Math.abs(t.amount))}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
+                        To add or fix transactions, use Add items to bills and assign this goal to the row.
+                      </p>
+                    </div>
+                  );
+                })()}
               </li>
             );
           })}

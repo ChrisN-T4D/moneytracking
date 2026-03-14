@@ -217,7 +217,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       if (autoTaggable > 0) {
         setTagMessage(`Loaded ${items.length} rows. ${autoTaggable} can be auto-tagged, ${manualReview} need manual review.`);
       } else {
-        setTagMessage(`Loaded ${items.length} rows. All need manual review. Save in batches of ${BATCH_SIZE}.`);
+        setTagMessage(`Loaded ${items.length} rows. All need manual review. Save new or Save all when done.`);
       }
     } catch (err) {
       clearTimeout(timeoutId);
@@ -246,14 +246,23 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     await runSaveBatch(toSave);
   }
 
-  /** Save the currently displayed rows (new tags and any changed tags; updates rules so old tag is replaced by new). */
-  async function saveVisibleBatch() {
-    const nextBatch = newRowsByDate.slice(0, BATCH_SIZE);
-    if (nextBatch.length === 0) {
-      setTagMessage("No rows on this page.");
+  /** Save all unsaved rows in one request. */
+  async function saveNew() {
+    const unsaved = tagSuggestions.filter((r) => !savedIds.has(r.id));
+    if (unsaved.length === 0) {
+      setTagMessage("No unsaved rows.");
       return;
     }
-    await runSaveBatch(nextBatch);
+    await runSaveBatch(unsaved);
+  }
+
+  /** Save every row (unsaved and already-saved); updates rules for any changed tags. */
+  async function saveAll() {
+    if (tagSuggestions.length === 0) {
+      setTagMessage("No rows to save.");
+      return;
+    }
+    await runSaveBatch(tagSuggestions);
   }
 
   async function runSaveBatch(toSave: typeof tagSuggestions) {
@@ -349,87 +358,6 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       setTagStatus("error");
       setTagMessage(err instanceof Error ? err.message : "Save failed.");
     }
-  }
-
-  async function saveAllInBatches() {
-    const all = tagSuggestions;
-    const saved = new Set(savedIds);
-    let unsaved = all.filter((row) => !saved.has(row.id));
-    if (unsaved.length === 0) {
-      setTagMessage("All rows already saved.");
-      return;
-    }
-    setTagStatus("saving");
-    setTagMessage(`Saving in batches of ${BATCH_SIZE}…`);
-    let totalSaved = 0;
-    while (unsaved.length > 0) {
-      const batch = unsaved.slice(0, BATCH_SIZE);
-      const items: Array<{
-        statementId: string;
-        description: string;
-        amount: number;
-        targetType: StatementTagTargetType;
-        targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
-        targetName: string;
-        goalId: string | null;
-        wasAutoTagged?: boolean;
-        originalSuggestion?: unknown;
-      }> = [];
-      for (const t of batch) {
-        const edit = tagEdits[t.id] ?? t.suggestion;
-        const wasAutoTagged = edit.wasAutoTagged ?? false;
-        const originalSuggestion = edit.originalSuggestion;
-        const wasOverride = wasAutoTagged && originalSuggestion &&
-          (originalSuggestion.targetType !== edit.targetType ||
-           originalSuggestion.targetSection !== edit.targetSection ||
-           originalSuggestion.targetName !== edit.targetName);
-        const item = {
-          statementId: t.id,
-          description: t.description,
-          amount: t.amount,
-          targetType: edit.targetType,
-          targetSection: edit.targetSection,
-          targetName: edit.targetName,
-          goalId: edit.goalId ?? null,
-          wasAutoTagged: wasOverride ? true : undefined,
-          originalSuggestion: wasOverride ? originalSuggestion : undefined,
-        };
-        items.push(item);
-        if (t.pairedStatementId && t.isTransferPairPrimary) {
-          const other = tagSuggestions.find((r) => r.id === t.pairedStatementId);
-          if (other) {
-            items.push({
-              ...item,
-              statementId: other.id,
-              description: other.description,
-              amount: other.amount,
-            });
-          }
-        }
-      }
-      const res = await fetch("/api/statement-tags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
-      });
-      const data = (await res.json()) as { ok?: boolean; message?: string; rulesCreated?: number; billsUpserted?: number };
-      if (!res.ok || data.ok === false) {
-        setTagStatus("error");
-        setTagMessage(data.message ?? "Save failed.");
-        return;
-      }
-      batch.forEach((t) => {
-        saved.add(t.id);
-        if (t.pairedStatementId) saved.add(t.pairedStatementId);
-      });
-      setSavedIds(new Set(saved));
-      totalSaved += batch.length;
-      setTagMessage(`Saved ${totalSaved} of ${all.length}…`);
-      unsaved = all.filter((row) => !saved.has(row.id));
-    }
-    setTagStatus("success");
-    setTagMessage(`Saved all ${totalSaved} tags.`);
-    router.refresh(); // Re-fetch so Current money status and bills "paid this month" update
   }
 
   const unsavedCount = tagSuggestions.filter((r) => !savedIds.has(r.id)).length;
@@ -891,20 +819,21 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                 <div className="flex flex-wrap gap-2 justify-start">
                   <button
                     type="button"
-                    onClick={() => void saveVisibleBatch()}
-                    disabled={tagStatus === "saving" || newRowsByDate.length === 0}
+                    onClick={() => void saveNew()}
+                    disabled={tagStatus === "saving" || unsavedCount === 0}
                     className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
-                    title="Save all displayed rows (new tags and tag changes; replaces old tag with new)"
+                    title="Save all unsaved rows"
                   >
-                    {tagStatus === "saving" ? "Saving…" : `Save next ${Math.min(BATCH_SIZE, unsavedCount)}`}
+                    {tagStatus === "saving" ? "Saving…" : `Save new (${unsavedCount})`}
                   </button>
                   <button
                     type="button"
-                    onClick={() => void saveAllInBatches()}
-                    disabled={tagStatus === "saving" || unsavedCount === 0}
+                    onClick={() => void saveAll()}
+                    disabled={tagStatus === "saving" || tagSuggestions.length === 0}
                     className="rounded-lg bg-emerald-700 text-white px-3 py-1.5 text-sm font-medium hover:bg-emerald-600 disabled:opacity-50"
+                    title="Save every row (updates all tags)"
                   >
-                    Save all ({unsavedCount}) in batches of {BATCH_SIZE}
+                    {tagStatus === "saving" ? "Saving…" : "Save all"}
                   </button>
                 </div>
                 <span className="text-xs text-neutral-500 dark:text-neutral-400">

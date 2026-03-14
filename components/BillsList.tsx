@@ -410,8 +410,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       // Use the actual paycheck end date if available, otherwise fall back to +14 days
                       const paycheckEnd = paycheckEndDate ?? (() => { const d = new Date(now); d.setDate(d.getDate() + 14); return d; })();
 
-                      // "Already paid this cycle" = we have actual payments in this 2-week window (same as "Paid this cycle" column)
-                      const { thisCycle: paidThisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null);
+                      // "Already paid this cycle" = payments in this 2-week window (or this month when frequency is monthly)
+                      const { thisCycle: paidThisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null, item.frequency);
                       const alreadyPaidThisCycle = paidThisCycle > 0;
 
                       const cycle = paidCycleStatus(item, breakdown, paidAmt);
@@ -482,7 +482,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   </td>
                   <td className="py-2.5 text-right tabular-nums">
                     {(() => {
-                      const { thisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null);
+                      const { thisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null, item.frequency);
                       if (thisCycle <= 0) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
                       return canShowBreakdown ? (
                         <button
@@ -502,7 +502,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   </td>
                   <td className="py-2.5 text-right tabular-nums">
                     {(() => {
-                      const { lastCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null);
+                      const { lastCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null, item.frequency);
                       if (lastCycle <= 0) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
                       return canShowBreakdown ? (
                         <button

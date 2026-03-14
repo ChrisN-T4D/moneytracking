@@ -189,21 +189,24 @@ export default async function Home() {
   }
   const monthlySpendingBySection = paidThisMonthBySection;
 
-  // Compute goal progress by matching statements against tag rules (which carry goalId).
+  // Compute goal progress and per-goal transaction list by matching statements against tag rules (which carry goalId).
   // This works even for statements that were tagged before goalId was saved to the statement record.
   const goalProgressById = new Map<string, number>();
+  const goalStatementsById = new Map<string, Array<{ id: string; date: string; description: string; amount: number }>>();
   for (const s of statements) {
-    // First check the statement's own goalId (set on newer tags)
+    let gid: string | null = null;
     const directGoalId = s.goalId;
     if (directGoalId) {
-      goalProgressById.set(directGoalId, (goalProgressById.get(directGoalId) ?? 0) + Math.abs(s.amount));
-      continue;
+      gid = directGoalId;
+    } else if (tagRules.length > 0) {
+      const matched = matchRule(tagRules, s);
+      if (matched?.rule.goalId) gid = matched.rule.goalId;
     }
-    // Fall back: match statement against tag rules and use the rule's goalId
-    const matched = tagRules.length > 0 ? matchRule(tagRules, s) : null;
-    if (matched?.rule.goalId) {
-      const gid = matched.rule.goalId;
+    if (gid) {
       goalProgressById.set(gid, (goalProgressById.get(gid) ?? 0) + Math.abs(s.amount));
+      const list = goalStatementsById.get(gid) ?? [];
+      list.push({ id: s.id, date: s.date, description: s.description, amount: s.amount });
+      goalStatementsById.set(gid, list);
     }
   }
 
@@ -520,6 +523,7 @@ export default async function Home() {
           today={today}
           summary={summary}
           goals={goals}
+          goalStatementsById={goalStatementsById}
           usePb={usePb}
           sectionsToRender={sectionsToRender}
           billsWithMeta={billsWithMeta}
@@ -552,6 +556,7 @@ function MainContent({
   today,
   summary: _summary,
   goals,
+  goalStatementsById,
   usePb: _usePb,
   sectionsToRender,
   billsWithMeta,
@@ -579,6 +584,7 @@ function MainContent({
   today: Date;
   summary: Summary | null;
   goals: MoneyGoal[];
+  goalStatementsById: Map<string, Array<{ id: string; date: string; description: string; amount: number }>>;
   usePb: boolean;
   sectionsToRender: Section[];
   billsWithMeta: BillOrSubWithMeta[];
@@ -637,7 +643,7 @@ function MainContent({
 
         {/* GoalsProvider shares goals state between SummaryCard and GoalsSection
             so that changing a monthly contribution instantly updates the left over */}
-        <GoalsProvider initialGoals={goals}>
+        <GoalsProvider initialGoals={goals} goalStatementsById={goalStatementsById}>
           {/* Current money status - flow and per-account */}
           <SummaryCard moneyStatus={moneyStatus} />
 

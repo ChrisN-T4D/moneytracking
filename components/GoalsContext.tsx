@@ -3,20 +3,25 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { MoneyGoal } from "@/lib/types";
 
+export type GoalTransaction = { id: string; date: string; description: string; amount: number };
+
 interface GoalsContextValue {
   goals: MoneyGoal[];
   setGoals: React.Dispatch<React.SetStateAction<MoneyGoal[]>>;
   updateGoalContribution: (id: string, amount: number | null) => void;
   totalMonthlyContributions: number;
+  goalStatementsById: Map<string, GoalTransaction[]>;
 }
 
 const GoalsContext = createContext<GoalsContextValue | null>(null);
 
 export function GoalsProvider({
   initialGoals,
+  goalStatementsById = new Map(),
   children,
 }: {
   initialGoals: MoneyGoal[];
+  goalStatementsById?: Map<string, GoalTransaction[]>;
   children: ReactNode;
 }) {
   const [goals, setGoals] = useState<MoneyGoal[]>(() => {
@@ -43,7 +48,7 @@ export function GoalsProvider({
 
   return (
     <GoalsContext.Provider
-      value={{ goals, setGoals, updateGoalContribution, totalMonthlyContributions }}
+      value={{ goals, setGoals, updateGoalContribution, totalMonthlyContributions, goalStatementsById }}
     >
       {children}
     </GoalsContext.Provider>

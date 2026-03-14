@@ -44,27 +44,52 @@ function toDateOnly(d: Date): string {
 }
 
 /**
- * Sum amounts in breakdown that fall within the current 2-week cycle (paycheckEnd - 14 days through paycheckEnd)
- * and the previous cycle (paycheckEnd - 28 days through paycheckEnd - 14 days).
+ * Sum amounts in breakdown for "this cycle" and "last cycle".
+ * - When frequency is "monthly": this cycle = current calendar month, last cycle = previous month (uses refDate or today).
+ * - Otherwise (e.g. 2weeks): this cycle = 2-week window (paycheckEnd - 14 days through paycheckEnd), last = prior 2 weeks.
  * Statement dates are compared as YYYY-MM-DD strings.
  */
 export function paidThisAndLastCycle(
   breakdown: ActualBreakdownItem[] | undefined,
-  paycheckEndDate: Date | null
+  paycheckEndDate: Date | null,
+  frequency?: string
 ): { thisCycle: number; lastCycle: number } {
   const result = { thisCycle: 0, lastCycle: 0 };
-  if (!breakdown?.length || !paycheckEndDate) return result;
-  const end = new Date(paycheckEndDate.getFullYear(), paycheckEndDate.getMonth(), paycheckEndDate.getDate());
-  const thisStart = new Date(end);
-  thisStart.setDate(thisStart.getDate() - 14);
-  const lastStart = new Date(thisStart);
-  lastStart.setDate(lastStart.getDate() - 14);
-  const thisStartStr = toDateOnly(thisStart);
-  const thisEndStr = toDateOnly(end);
-  const lastEnd = new Date(thisStart);
-  lastEnd.setDate(lastEnd.getDate() - 1);
-  const lastStartStr = toDateOnly(lastStart);
-  const lastEndStr = toDateOnly(lastEnd);
+  if (!breakdown?.length) return result;
+  const ref = paycheckEndDate ?? new Date();
+  const end = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+
+  let thisStartStr: string;
+  let thisEndStr: string;
+  let lastStartStr: string;
+  let lastEndStr: string;
+
+  if (frequency === "monthly") {
+    // Current month: first day through last day
+    const thisStart = new Date(end.getFullYear(), end.getMonth(), 1);
+    const thisEnd = new Date(end.getFullYear(), end.getMonth() + 1, 0);
+    thisStartStr = toDateOnly(thisStart);
+    thisEndStr = toDateOnly(thisEnd);
+    // Previous month
+    const lastStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
+    const lastEnd = new Date(end.getFullYear(), end.getMonth(), 0);
+    lastStartStr = toDateOnly(lastStart);
+    lastEndStr = toDateOnly(lastEnd);
+  } else {
+    if (!paycheckEndDate) return result;
+    // 2-week cycle
+    const thisStart = new Date(end);
+    thisStart.setDate(thisStart.getDate() - 14);
+    const lastStart = new Date(thisStart);
+    lastStart.setDate(lastStart.getDate() - 14);
+    thisStartStr = toDateOnly(thisStart);
+    thisEndStr = toDateOnly(end);
+    const lastEnd = new Date(thisStart);
+    lastEnd.setDate(lastEnd.getDate() - 1);
+    lastStartStr = toDateOnly(lastStart);
+    lastEndStr = toDateOnly(lastEnd);
+  }
+
   for (const t of breakdown) {
     const dateStr = t.date.slice(0, 10);
     if (dateStr >= thisStartStr && dateStr <= thisEndStr) result.thisCycle += t.amount;
