@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 import { AddItemsToBillsModal } from "@/components/AddItemsToBillsModal";
 import { AddPaychecksFromStatementsModal } from "@/components/AddPaychecksFromStatementsModal";
 import { StatementUploadModal } from "@/components/StatementUploadModal";
+import { AddTransfersModal } from "@/components/AddTransfersModal";
 
 export function HeaderPreferencesMenu() {
   const [open, setOpen] = useState(false);
   const [openUploadModal, setOpenUploadModal] = useState(false);
   const [openPaychecksModal, setOpenPaychecksModal] = useState(false);
   const [openBillsModal, setOpenBillsModal] = useState(false);
+  const [openTransfersModal, setOpenTransfersModal] = useState(false);
   const router = useRouter();
 
   return (
@@ -98,6 +100,16 @@ export function HeaderPreferencesMenu() {
               >
                 Add items to bills
               </button>
+              <button
+                type="button"
+                className="w-full rounded-full bg-amber-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-amber-500"
+                onClick={() => {
+                  setOpen(false);
+                  setOpenTransfersModal(true);
+                }}
+              >
+                Add transfers
+              </button>
             </div>
           </div>
         </div>
@@ -106,6 +118,7 @@ export function HeaderPreferencesMenu() {
       <StatementUploadModal open={openUploadModal} onClose={() => setOpenUploadModal(false)} />
       <AddPaychecksFromStatementsModal open={openPaychecksModal} onClose={() => setOpenPaychecksModal(false)} />
       <AddItemsToBillsModal open={openBillsModal} onClose={() => setOpenBillsModal(false)} />
+      <AddTransfersModal open={openTransfersModal} onClose={() => setOpenTransfersModal(false)} />
     </div>
   );
 }

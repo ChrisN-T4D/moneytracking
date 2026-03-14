@@ -663,12 +663,6 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                           >
                             <option value="variable_expense">Variable expenses</option>
                             <option value="ignore">Ignore</option>
-                            <optgroup label="Auto transfer">
-                              <option value="auto_transfer">Auto transfer (unspecified)</option>
-                              {autoTransfers.map((t) => (
-                                <option key={t.id} value={`auto_transfer|${t.whatFor}`}>Auto: {displayBillName(t.whatFor)}</option>
-                              ))}
-                            </optgroup>
                             <optgroup label="Income">
                               {[...new Set([...INCOME_NAMES, ...newRowsByDate.filter((r) => (tagEdits[r.id] ?? r.suggestion).targetType === "income").map((r) => (tagEdits[r.id] ?? r.suggestion).targetName).filter(Boolean)])].map((name) => (
                                 <option key={name} value={`income|${name}`}>Income: {displayBillName(name)}</option>
@@ -764,12 +758,6 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                                 >
                                   <option value="variable_expense">Variable expenses</option>
                                   <option value="ignore">Ignore</option>
-                                  <optgroup label="Auto transfer">
-                                    <option value="auto_transfer">Auto transfer (unspecified)</option>
-                                    {autoTransfers.map((t) => (
-                                      <option key={t.id} value={`auto_transfer|${t.whatFor}`}>Auto: {displayBillName(t.whatFor)}</option>
-                                    ))}
-                                  </optgroup>
                                   <optgroup label="Income">
                                     {[...new Set([...INCOME_NAMES, ...tagSuggestions.filter((r) => (tagEdits[r.id] ?? r.suggestion).targetType === "income").map((r) => (tagEdits[r.id] ?? r.suggestion).targetName).filter(Boolean)])].map((name) => (
                                       <option key={name} value={`income|${name}`}>Income: {displayBillName(name)}</option>

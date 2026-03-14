@@ -1,5 +1,3 @@
-import { SummaryCard } from "@/components/SummaryCard";
-import { NextPaychecksCard } from "@/components/NextPaychecksCard";
 import { BillsList } from "@/components/BillsList";
 import { SpanishForkSection } from "@/components/SpanishForkSection";
 import { AutoTransfersSection } from "@/components/AutoTransfersSection";
@@ -9,6 +7,8 @@ import { HeaderPreferencesMenu } from "@/components/HeaderPreferencesMenu";
 import { HeaderAuth } from "@/components/HeaderAuth";
 import { AuthenticatedContent } from "@/components/AuthenticatedContent";
 import { DraggableSectionCards } from "@/components/DraggableSectionCards";
+import { RecurringTab } from "@/components/RecurringTab";
+import { TabLayout } from "@/components/TabLayout";
 import {
   initialSummary,
   billsAccountBills,
@@ -190,10 +190,12 @@ export default async function Home() {
   const monthlySpendingBySection = paidThisMonthBySection;
 
   // Compute goal progress and per-goal transaction list by matching statements against tag rules (which carry goalId).
-  // This works even for statements that were tagged before goalId was saved to the statement record.
+  // This works for all items: bills, subscriptions, income, variable, AND transfers with goalId.
   const goalProgressById = new Map<string, number>();
   const goalStatementsById = new Map<string, Array<{ id: string; date: string; description: string; amount: number }>>();
+  const goalCountedIds = new Set<string>();
   for (const s of statements) {
+    if (goalCountedIds.has(s.id)) continue;
     let gid: string | null = null;
     const directGoalId = s.goalId;
     if (directGoalId) {
@@ -207,6 +209,7 @@ export default async function Home() {
       const list = goalStatementsById.get(gid) ?? [];
       list.push({ id: s.id, date: s.date, description: s.description, amount: s.amount });
       goalStatementsById.set(gid, list);
+      goalCountedIds.add(s.id);
     }
   }
 
@@ -632,26 +635,23 @@ function MainContent({
       </header>
 
       <div className="relative z-10 p-4 space-y-6 max-w-2xl mx-auto">
-        {/* Next paychecks: today vs each person's next pay date */}
-        <NextPaychecksCard
-          today={today}
-          paycheckPaidThisMonth={paycheckPaidThisMonth}
-          paycheckConfigs={paycheckConfigs}
-          incomeThisMonthToDate={incomeThisMonthToDate}
-          variableIncomeThisMonth={variableIncomeThisMonth}
-        />
-
-        {/* GoalsProvider shares goals state between SummaryCard and GoalsSection
-            so that changing a monthly contribution instantly updates the left over */}
         <GoalsProvider initialGoals={goals} goalStatementsById={goalStatementsById}>
-          {/* Current money status - flow and per-account */}
-          <SummaryCard moneyStatus={moneyStatus} />
-
-          {/* Current money goals */}
-          <GoalsSection />
-        </GoalsProvider>
-
-        {/* Sections: from PocketBase when hasPb (use default order if sections empty), else static. Draggable when hasPb. */}
+          <TabLayout
+            recurringContent={
+              <RecurringTab
+                paycheckConfigs={paycheckConfigs}
+                billsWithMeta={billsWithMeta}
+                spanishForkBills={hasPb ? spanishForkPb : spanishForkBills}
+                autoTransfers={hasPb ? autoTransfersPb : autoTransfers}
+                paidThisMonthByBill={paidThisMonthByBill}
+                paidThisMonthByAccount={moneyStatus.paidThisMonth}
+                incomeThisMonth={incomeThisMonthToDate ?? 0}
+                today={today}
+              />
+            }
+            goalsContent={<GoalsSection />}
+            billsContent={
+              <div className="space-y-6">
         {hasPb ? (
           <DraggableSectionCards sections={sectionsToRender}>
             {sectionsToRender.map((section) => {
@@ -854,6 +854,10 @@ function MainContent({
             <AutoTransfersSection transfers={autoTransfers} />
           </>
         )}
+              </div>
+            }
+          />
+        </GoalsProvider>
       </div>
     </main>
   );

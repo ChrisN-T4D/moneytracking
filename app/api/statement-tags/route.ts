@@ -16,7 +16,7 @@ import type {
   BillListType,
 } from "@/lib/types";
 import { suggestTagsForStatements, makeStatementPattern, matchRule } from "@/lib/statementTagging";
-import { findTransferPairs } from "@/lib/statementsAnalysis";
+import { findTransferPairs, isTransferDescription } from "@/lib/statementsAnalysis";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
 
@@ -121,7 +121,9 @@ async function getBillsForTagging() {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const reqUrl = new URL(request.url);
+  const transfersOnly = reqUrl.searchParams.get("transfersOnly") === "true";
   if (!POCKETBASE_URL) {
     return NextResponse.json(
       { ok: false, message: "NEXT_PUBLIC_POCKETBASE_URL is not set." },
@@ -236,6 +238,26 @@ export async function GET() {
       subsectionsByType.subscriptions
     );
 
+    // transfersOnly mode: return only transfer-like statements for Add Transfers modal
+    if (transfersOnly) {
+      const transferStatements = statements.filter((s) => isTransferDescription(s.description ?? ""));
+      const { pairMap } = findTransferPairs(statements);
+      const transferItems = transferStatements.map((s) => ({
+        id: s.id,
+        date: s.date,
+        description: s.description,
+        amount: s.amount,
+        account: s.account ?? null,
+        pairedStatementId: pairMap.get(s.id) ?? null,
+        goalId: s.goalId ?? null,
+      }));
+      return NextResponse.json({
+        ok: true,
+        items: transferItems,
+        goals: goals.map((g) => ({ id: g.id, name: g.name })),
+      });
+    }
+
     if (statements.length === 0) {
       const hasAdmin = Boolean(
         process.env.POCKETBASE_ADMIN_EMAIL && process.env.POCKETBASE_ADMIN_PASSWORD
@@ -253,17 +275,20 @@ export async function GET() {
       });
     }
 
+    // Exclude transfer-like statements from Add items to bills (they go to Add Transfers instead)
+    const nonTransferStatements = statements.filter((s) => !isTransferDescription(s.description ?? ""));
+
     // Split statements into two buckets:
     // 1. needsReview — untagged (no non-ignore rule) or goal-linked
     // 2. alreadyTagged — has a non-ignore rule match (user can optionally show to re-tag)
     const needsReview: typeof statements = [];
     const alreadyTagged: typeof statements = [];
-    for (const s of statements) {
+    for (const s of nonTransferStatements) {
       const matched = matchRule(rules, s);
       if (matched && matched.rule.targetType !== "ignore") {
-        alreadyTagged.push(s); // already has a rule → show only when user toggles "show tagged"
+        alreadyTagged.push(s);
       } else {
-        needsReview.push(s); // untagged or goal-only → always show
+        needsReview.push(s);
       }
     }
 
