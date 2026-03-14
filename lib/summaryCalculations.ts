@@ -220,15 +220,58 @@ export function getNextAutoTransferInByAccount(
   };
 }
 
-/** Sum predicted need for items where inThisPaycheck is true (by account). */
+/** Upcoming transfer-out from Checking (to Bills or Spanish Fork) in the date range [fromDate, toDate]. Used for chart "Out" list. */
+export interface UpcomingTransferOut {
+  date: Date;
+  name: string;
+  amount: number;
+}
+
+export function getUpcomingTransfersOutOfChecking(
+  transfers: AutoTransfer[],
+  fromDate: Date,
+  toDate: Date
+): UpcomingTransferOut[] {
+  const from = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+  const to = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate());
+  const result: UpcomingTransferOut[] = [];
+  for (const t of transfers) {
+    if (t.transferredThisCycle) continue;
+    const bucket = classifyAutoTransferAccount(t.account ?? "", t.whatFor ?? "");
+    if (bucket !== "bills" && bucket !== "spanishFork") continue;
+    const next = getNextAutoTransferDate(t.date ?? "", t.frequency ?? "", from);
+    if (Number.isNaN(next.getTime()) || next < from || next > to) continue;
+    result.push({
+      date: new Date(next.getFullYear(), next.getMonth(), next.getDate()),
+      name: t.whatFor ?? "Transfer",
+      amount: t.amount,
+    });
+  }
+  result.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return result;
+}
+
+/** Bill names that are variable/discretionary (groceries & gas budget) — excluded from "needed before next paycheck". */
+const VARIABLE_BILL_NAMES = new Set(
+  ["variable expenses", "groceries & gas", "groceries", "gas"].map((s) => s.toLowerCase())
+);
+
+function isVariableOrGroceriesBill(name: string | undefined): boolean {
+  const n = (name ?? "").trim().toLowerCase();
+  return n.length > 0 && VARIABLE_BILL_NAMES.has(n);
+}
+
+/** Sum predicted need for items where inThisPaycheck is true (by account).
+ * Excludes variable/groceries & gas bills so the $250 budget is not counted as "needed". */
 export function requiredThisPaycheckByAccountFromBills(
-  billsWithMeta: { account?: string; listType?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[],
+  billsWithMeta: { account?: string; listType?: string; name?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[],
   spanishForkBills: { amount: number; frequency: string; inThisPaycheck?: boolean }[]
 ): PredictedNeedByAccount {
   let billsAccount = 0;
   let checkingAccount = 0;
   for (const b of billsWithMeta) {
     if (!b.inThisPaycheck) continue;
+    if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
     const m = monthlyEquivalent(b.amount, b.frequency);
     if (b.account === "bills_account") billsAccount += m;
     else if (b.account === "checking_account") checkingAccount += m;
@@ -240,10 +283,34 @@ export function requiredThisPaycheckByAccountFromBills(
   return { billsAccount, checkingAccount, spanishFork };
 }
 
+/** Per-account lists of recurring items that make up "needed before next paycheck" (same filters as requiredThisPaycheckByAccountFromBills). */
+export function getNeededBeforeNextPaycheckBreakdown(
+  billsWithMeta: { account?: string; name?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[],
+  spanishForkBills: { name?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[]
+): { checkingAccount: { name: string; amount: number }[]; billsAccount: { name: string; amount: number }[]; spanishFork: { name: string; amount: number }[] } {
+  const checking: { name: string; amount: number }[] = [];
+  const bills: { name: string; amount: number }[] = [];
+  for (const b of billsWithMeta) {
+    if (!b.inThisPaycheck) continue;
+    if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
+    const m = monthlyEquivalent(b.amount, b.frequency);
+    const name = (b.name ?? "").trim() || "Bill";
+    if (b.account === "bills_account") bills.push({ name, amount: m });
+    else if (b.account === "checking_account") checking.push({ name, amount: m });
+  }
+  const spanishFork: { name: string; amount: number }[] = [];
+  for (const b of spanishForkBills) {
+    if (!b.inThisPaycheck) continue;
+    const name = (b.name ?? "").trim() || "Bill";
+    spanishFork.push({ name, amount: monthlyEquivalent(b.amount, b.frequency) });
+  }
+  return { checkingAccount: checking, billsAccount: bills, spanishFork };
+}
+
 /** Required total (all accounts) for the 2-week period ending on periodEndDate. Uses periodStart = periodEndDate - 14 days.
- * Sums the single-payment amount for each bill due in the period (not monthly equivalent), so biweekly bills aren't doubled. */
+ * Sums the single-payment amount for each bill due in the period (not monthly equivalent). Excludes variable/groceries & gas. */
 export function requiredForPayPeriodEnd(
-  billsWithMeta: { account?: string; nextDue?: string; amount: number; frequency: string }[],
+  billsWithMeta: { account?: string; name?: string; nextDue?: string; amount: number; frequency: string }[],
   spanishForkBills: { nextDue?: string; amount: number; frequency: string }[],
   periodEndDate: Date
 ): number {
@@ -253,6 +320,7 @@ export function requiredForPayPeriodEnd(
   const startStr = formatDateToYYYYMMDD(start);
   let total = 0;
   for (const b of billsWithMeta) {
+    if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
     const { inThisPaycheck } = getNextDueAndPaycheck(
       (b.nextDue ?? "").trim() || startStr,
       b.frequency ?? "",
@@ -260,7 +328,6 @@ export function requiredForPayPeriodEnd(
       end
     );
     if (!inThisPaycheck) continue;
-    // One occurrence in this period = b.amount (not monthly equivalent; biweekly would otherwise be 2x)
     if (b.account === "bills_account") total += b.amount;
     else if (b.account === "checking_account") total += b.amount;
   }
@@ -486,6 +553,8 @@ export interface MoneyStatusExtras {
   todayDate?: Date;
   /** Upcoming bill due dates (for display in chart). */
   upcomingBills?: { date: string; name: string; amount: number; account?: string }[];
+  /** Transfers out of Checking (to Bills/SF) in this paycheck window (for chart "Out" list). */
+  upcomingTransfersOutOfChecking?: UpcomingTransferOut[];
   /** Auto transfers with transferredThisCycle for "this cycle" status section. */
   autoTransfers?: AutoTransfer[];
   /** Extra amount to add to Bills/Spanish Fork balance when transfer marked done this cycle (so predicted amount reflects it). */

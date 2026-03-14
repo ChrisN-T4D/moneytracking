@@ -29,3 +29,11 @@ body {
     padding-top: env(safe-area-inset-top);
   }
 }
+/* Top padding: at least 1.25rem so header clears status bar; use safe area when larger (notch devices) */
+.pt-safe {
+  padding-top: max(1.25rem, env(safe-area-inset-top, 0px));
+}
+/* Right padding: at least 1.25rem, or safe-area on notched devices */
+.pr-safe {
+  padding-right: max(1.25rem, env(safe-area-inset-right, 0px));
+}

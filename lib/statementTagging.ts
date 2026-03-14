@@ -157,12 +157,31 @@ function calculateConfidence(rule: StatementTagRule): "HIGH" | "MEDIUM" | "LOW" 
   return "LOW";
 }
 
+const BILL_LIKE_TYPES = ["bill", "subscription", "spanish_fork", "variable_expense"] as const;
+
 export function suggestTagsForStatements(
   statements: StatementRecord[],
   rules: StatementTagRule[]
 ): StatementTagSuggestion[] {
   return statements.map((s) => {
     const heuristicName = billNameFromDescription(s.description);
+    // Prefer tag stored on the statement (e.g. "Count as bill" from Add Transfers)
+    if (
+      s.targetType &&
+      BILL_LIKE_TYPES.includes(s.targetType as (typeof BILL_LIKE_TYPES)[number]) &&
+      s.targetSection &&
+      s.targetName
+    ) {
+      return {
+        statement: s,
+        targetType: s.targetType as StatementTagTargetType,
+        targetSection: s.targetSection,
+        targetName: s.targetName,
+        goalId: s.goalId ?? null,
+        confidence: "HIGH",
+        matchType: "exact_pattern",
+      };
+    }
     const matched = matchRule(rules, s);
     if (matched) {
       // Use the rule's target name (e.g. user set "Groceries & Gas"); never override back to heuristic like "Walmart"
@@ -310,6 +329,8 @@ export interface ActualRow {
 /**
  * Sum tagged statement amounts for a given calendar month, grouped by subsection (section + listType + name).
  * Used for both "paid this month" (current month) and "Actual {monthName}" (last month).
+ * Period is always determined by the statement's transaction date (s.date); same for tags from
+ * Add items to bills or Add Transfers "Count as bill".
  */
 export function computeActualsForMonth(
   statements: StatementRecord[],
@@ -322,10 +343,13 @@ export function computeActualsForMonth(
   const inMonth = statements.filter((s) => {
     const d = new Date(s.date);
     if (d < monthStart || d >= monthEnd) return false;
-    // Skip transfer check for statements that have an explicit tag rule — the user
-    // intentionally tagged them (e.g. a utility ACH debit that looks like a transfer).
     const hasExplicitRule = matchRule(rules, s) !== null;
-    if (!hasExplicitRule && isTransferDescription(s.description ?? "")) return false;
+    const hasStatementTag =
+      s.targetType &&
+      BILL_LIKE_TYPES.includes(s.targetType as (typeof BILL_LIKE_TYPES)[number]) &&
+      s.targetSection &&
+      s.targetName;
+    if (!hasExplicitRule && !hasStatementTag && isTransferDescription(s.description ?? "")) return false;
     return true;
   });
   const suggestions = suggestTagsForStatements(inMonth, rules);
@@ -409,10 +433,13 @@ export function computeActualsForMonthWithBreakdown(
   const inMonth = statements.filter((s) => {
     const d = new Date(s.date);
     if (d < monthStart || d >= monthEnd) return false;
-    // Skip transfer check for statements that have an explicit tag rule — the user
-    // intentionally tagged them (e.g. a utility ACH debit that looks like a transfer).
     const hasExplicitRule = matchRule(rules, s) !== null;
-    if (!hasExplicitRule && isTransferDescription(s.description ?? "")) return false;
+    const hasStatementTag =
+      s.targetType &&
+      BILL_LIKE_TYPES.includes(s.targetType as (typeof BILL_LIKE_TYPES)[number]) &&
+      s.targetSection &&
+      s.targetName;
+    if (!hasExplicitRule && !hasStatementTag && isTransferDescription(s.description ?? "")) return false;
     return true;
   });
   const suggestions = suggestTagsForStatements(inMonth, rules);

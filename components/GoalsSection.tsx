@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { formatCurrency } from "@/lib/format";
 import type { MoneyGoal } from "@/lib/types";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
@@ -29,6 +30,8 @@ export function GoalsSection() {
   const [contribValue, setContribValue] = useState("");
   const [contribError, setContribError] = useState<string | null>(null);
   const contribRef = useRef<HTMLInputElement>(null);
+  const [clearingGoalId, setClearingGoalId] = useState<string | null>(null);
+  const router = useRouter();
 
   async function handleAddGoal(e: React.FormEvent) {
     e.preventDefault();
@@ -90,6 +93,30 @@ export function GoalsSection() {
       }
     } catch {
       setContribError("Could not connect to server.");
+    }
+  }
+
+  async function handleClearTransactions(goalId: string) {
+    if (!confirm("Clear all transactions from this goal? You can re-add them in Add Transfers or Add items to bills.")) return;
+    setClearingGoalId(goalId);
+    setError("");
+    try {
+      const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/clear-statements`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = (await res.json()) as { ok?: boolean; message?: string; cleared?: number };
+      if (!res.ok || data.ok === false) {
+        setError(data.message ?? "Failed to clear transactions.");
+        return;
+      }
+      setGoals((prev) => prev.map((g) => (g.id === goalId ? { ...g, currentAmount: 0 } : g)));
+      setExpandedGoalId((id) => (id === goalId ? null : id));
+      router.refresh();
+    } catch {
+      setError("Could not connect to server.");
+    } finally {
+      setClearingGoalId(null);
     }
   }
 
@@ -230,13 +257,23 @@ export function GoalsSection() {
                         {g.name}
                       </p>
                       {(goalStatementsById.get(g.id)?.length ?? 0) > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setExpandedGoalId(expandedGoalId === g.id ? null : g.id)}
-                          className="text-[11px] text-sky-600 dark:text-sky-400 hover:underline"
-                        >
-                          {expandedGoalId === g.id ? "Hide transactions" : "View transactions"}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedGoalId(expandedGoalId === g.id ? null : g.id)}
+                            className="text-[11px] text-sky-600 dark:text-sky-400 hover:underline"
+                          >
+                            {expandedGoalId === g.id ? "Hide transactions" : "View transactions"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleClearTransactions(g.id)}
+                            disabled={clearingGoalId === g.id}
+                            className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline disabled:opacity-50"
+                          >
+                            {clearingGoalId === g.id ? "Clearing…" : "Clear all"}
+                          </button>
+                        </>
                       )}
                     </div>
                     {g.category && (

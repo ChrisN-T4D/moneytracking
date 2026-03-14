@@ -84,6 +84,8 @@ interface IncomeVsNeededChartProps {
   todayDate?: Date | null;
   /** Upcoming bill due dates (this paycheck) */
   upcomingBills?: { date: string; name: string; amount: number; account?: string }[];
+  /** Transfers out of Checking (to Bills/SF) in this paycheck window */
+  upcomingTransfersOutOfChecking?: { date: Date; name: string; amount: number }[];
   /** Next paycheck date (for Checking bar label) */
   nextPaycheckDate?: Date | null;
   /** Next auto-transfer in to Bills (for bar label) */
@@ -108,6 +110,7 @@ export function IncomeVsNeededChart({
   nextMonthName,
   todayDate,
   upcomingBills = [],
+  upcomingTransfersOutOfChecking = [],
   nextPaycheckDate,
   nextBillsInflowDate,
   nextSpanishForkInflowDate,
@@ -194,9 +197,26 @@ export function IncomeVsNeededChart({
                 ? Math.min(99, Math.max(1, (daysBetween(todayNorm, nextTransferNorm) / totalDays) * 100))
                 : null;
 
-            // Combined list for numbering: auto transfer (Bills/SF only) + bills, sorted by date. Numbers on bar refer to this list.
-            type TimelineEntry = { type: "auto"; date: Date; dateLabel: string; name: string; amount: number } | { type: "bill"; date: Date; dateLabel: string; name: string; amount: number };
+            // Combined list for numbering: for Checking = transfers out + bills; for Bills/SF = auto transfer in + bills.
+            type TimelineEntry =
+              | { type: "auto"; date: Date; dateLabel: string; name: string; amount: number }
+              | { type: "transfer_out"; date: Date; dateLabel: string; name: string; amount: number }
+              | { type: "bill"; date: Date; dateLabel: string; name: string; amount: number };
             const timelineItems: TimelineEntry[] = [];
+            if (key === "checking" && upcomingTransfersOutOfChecking.length > 0) {
+              for (const t of upcomingTransfersOutOfChecking) {
+                const d = t.date >= todayNorm && t.date <= endDate ? t.date : null;
+                if (d) {
+                  timelineItems.push({
+                    type: "transfer_out",
+                    date: d,
+                    dateLabel: formatDateShort(d),
+                    name: t.name,
+                    amount: t.amount,
+                  });
+                }
+              }
+            }
             if ((key === "bills" || key === "spanishFork") && nextTransferNorm) {
               timelineItems.push({
                 type: "auto",
@@ -268,11 +288,11 @@ export function IncomeVsNeededChart({
                     {timelineItems.map((item, i) => {
                       const daysFromStart = daysBetween(todayNorm, item.date);
                       const pct = Math.min(99, Math.max(1, (daysFromStart / totalDays) * 100));
-                      const isAuto = item.type === "auto";
-                      return (
+                      const isTransfer = item.type === "auto" || item.type === "transfer_out";
+                          return (
                         <span
                           key={i}
-                          className={`absolute top-0 -translate-x-1/2 w-px h-2 ${isAuto ? "bg-violet-600 dark:bg-violet-500" : "bg-amber-600 dark:bg-amber-500"}`}
+                          className={`absolute top-0 -translate-x-1/2 w-px h-2 ${isTransfer ? "bg-violet-600 dark:bg-violet-500" : "bg-amber-600 dark:bg-amber-500"}`}
                           style={{ left: `${pct}%` }}
                           title={`${i + 1}. ${item.dateLabel} · ${item.name} ${formatCurrency(item.amount)}`}
                         />
@@ -296,12 +316,12 @@ export function IncomeVsNeededChart({
                       >
                         {withRows.map((item) => {
                           const entry = timelineItems[item.index];
-                          const isAuto = entry?.type === "auto";
+                          const isTransfer = entry?.type === "auto" || entry?.type === "transfer_out";
                           return (
                             <div
                               key={`num-${item.index}`}
                               className={`absolute -translate-x-1/2 z-10 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold tabular-nums ${
-                                isAuto ? "bg-violet-500 dark:bg-violet-600 text-violet-950 dark:text-violet-100" : "bg-amber-500 dark:bg-amber-600 text-amber-950 dark:text-amber-100"
+                                isTransfer ? "bg-violet-500 dark:bg-violet-600 text-violet-950 dark:text-violet-100" : "bg-amber-500 dark:bg-amber-600 text-amber-950 dark:text-amber-100"
                               }`}
                               style={{
                                 left: `${item.pct}%`,

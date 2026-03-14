@@ -32,6 +32,10 @@ interface BillsListProps {
   canDelete?: boolean;
   /** Next biweekly paycheck date — used when changing a bill to 2-week frequency. */
   paycheckEndDate?: Date | null;
+  /** Section account (e.g. checking_account) — required for grouped-row update/delete by name. */
+  sectionAccount?: string;
+  /** Section list type (e.g. bills) — required for grouped-row update/delete by name. */
+  sectionListType?: string;
 }
 
 const FREQ_BADGE_BASE = "inline-flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold tabular-nums";
@@ -66,7 +70,7 @@ interface EditState {
   error: string | null;
 }
 
-export function BillsList({ title, subtitle, items: initialItems, monthlySpending, budgetedTotal, requiredThisPaycheck, currentAmountInAccount, paidByName = {}, breakdownByName = {}, canDelete = false, paycheckEndDate }: BillsListProps) {
+export function BillsList({ title, subtitle, items: initialItems, monthlySpending, budgetedTotal, requiredThisPaycheck, currentAmountInAccount, paidByName = {}, breakdownByName = {}, canDelete = false, paycheckEndDate, sectionAccount, sectionListType }: BillsListProps) {
   const { theme } = useTheme();
   const router = useRouter();
 
@@ -199,7 +203,11 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
     setItems((prev) => prev.map((b) => b.id === item.id ? { ...b, amount } : b));
 
     try {
-      const res = await fetch(`/api/bills/${item.id}`, {
+      const isGrouped = isGroupedBillId(item.id);
+      const url = isGrouped && sectionAccount && sectionListType
+        ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
+        : `/api/bills/${item.id}`;
+      const res = await fetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount }),
@@ -211,19 +219,23 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
         return;
       }
       setEdit(null);
+      router.refresh();
     } catch {
       setItems((prev) => prev.map((b) => b.id === item.id ? { ...b, amount: item.amount } : b));
       setEdit((e) => e ? { ...e, saving: false, error: "Save failed" } : null);
     }
-  }, [edit]);
+  }, [edit, sectionAccount, sectionListType]);
 
   const handleDelete = useCallback(async (item: BillOrSub) => {
-    if (isGroupedBillId(item.id)) return;
     if (!confirm(`Delete "${displayBillName(item.name)}"?`)) return;
     setDeleteError(null);
     setDeletingId(item.id);
     try {
-      const res = await fetch(`/api/bills/${item.id}`, { method: "DELETE" });
+      const isGrouped = isGroupedBillId(item.id);
+      const url = isGrouped && sectionAccount && sectionListType
+        ? `/api/bills/delete-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
+        : `/api/bills/${item.id}`;
+      const res = await fetch(url, { method: "DELETE" });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
       if (!res.ok) {
         setDeleteError(data.message ?? `Error ${res.status}`);
@@ -235,7 +247,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
     } finally {
       setDeletingId(null);
     }
-  }, []);
+  }, [sectionAccount, sectionListType]);
 
   return (
     <section className={getCardClasses(theme.bills)}>
@@ -284,7 +296,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
           </colgroup>
           <thead>
             <tr className="border-b border-neutral-200 dark:border-neutral-600 text-left text-xs text-neutral-500 dark:text-neutral-400">
-              <th className="py-2 pr-2 font-medium min-w-0">Name</th>
+              <th className="sticky left-0 z-10 py-2 pr-2 font-medium min-w-0 bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-700 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] dark:shadow-[2px_0_4px_-2px_rgba(0,0,0,0.3)]">Name</th>
               <th className="py-2 pr-2 font-medium text-center">Freq</th>
               <th className="py-2 pr-2 font-medium whitespace-nowrap">Due / Last paid</th>
               <th className="py-2 pr-2 font-medium text-center whitespace-nowrap">Left in paycheck</th>
@@ -306,7 +318,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   key={item.id}
                   className="border-b border-neutral-100 dark:border-neutral-700/50 last:border-0"
                 >
-                  <td className="py-2.5 pr-2 text-neutral-800 dark:text-neutral-200 min-w-0" title={displayName}>
+                  <td className="sticky left-0 z-10 py-2.5 pr-2 text-neutral-800 dark:text-neutral-200 min-w-0 bg-white dark:bg-neutral-900 border-r border-neutral-100 dark:border-neutral-700/50" title={displayName}>
                     <span className="block min-w-0 truncate">
                       {canShowBreakdown ? (
                         <button
@@ -323,7 +335,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     </span>
                   </td>
                   <td className="py-2.5 pr-2 text-neutral-600 dark:text-neutral-400 text-center shrink-0">
-                    {canDelete && !isGroupedBillId(item.id) ? (
+                    {canDelete && (!isGroupedBillId(item.id) || (sectionAccount && sectionListType)) ? (
                       <button
                         type="button"
                         title="Click to change frequency (monthly → 2 weeks → yearly)"
@@ -336,11 +348,16 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                             : item.nextDue;
                           setItems((cur) => cur.map((i) => i.id === item.id ? { ...i, frequency: next, nextDue } : i));
                           try {
-                            await fetch(`/api/bills/${item.id}`, {
+                            const isGrouped = isGroupedBillId(item.id);
+                            const url = isGrouped && sectionAccount && sectionListType
+                              ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
+                              : `/api/bills/${item.id}`;
+                            const ok = (await fetch(url, {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({ frequency: next, nextDue }),
-                            });
+                            })).ok;
+                            if (ok) router.refresh();
                           } catch {
                             setItems((cur) => cur.map((i) => i.id === item.id ? { ...i, frequency: item.frequency, nextDue: item.nextDue } : i));
                           }
@@ -443,7 +460,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     })()}
                   </td>
                   <td className="py-2.5 pr-2 text-right font-medium tabular-nums">
-                    {isGroupedBillId(item.id) ? (
+                    {isGroupedBillId(item.id) && !(sectionAccount && sectionListType) ? (
                       <span className="tabular-nums">{formatCurrency(item.amount)}</span>
                     ) : isEditing ? (
                       <div className="flex flex-col items-end gap-1">
@@ -526,7 +543,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   </td>
                   {canDelete && (
                     <td className="py-2.5 pl-2 text-right">
-                      {!isGroupedBillId(item.id) ? (
+                      {(!isGroupedBillId(item.id) || (sectionAccount && sectionListType)) ? (
                         <button
                           type="button"
                           onClick={() => handleDelete(item)}
@@ -679,9 +696,12 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const prev = dateEditModal.item.nextDue;
                       try {
                         const item = dateEditModal.item;
-                        const endpoint = isGroupedBillId(item.id)
-                          ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
-                          : `/api/bills/${item.id}`;
+                        const isGrouped = isGroupedBillId(item.id);
+                        const endpoint = isGrouped && sectionAccount && sectionListType
+                          ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
+                          : isGrouped
+                            ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
+                            : `/api/bills/${item.id}`;
                         const res = await fetch(endpoint, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
@@ -710,9 +730,12 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const item = dateEditModal.item;
                       const prev = item.nextDue;
                       try {
-                        const endpoint = isGroupedBillId(item.id)
-                          ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
-                          : `/api/bills/${item.id}`;
+                        const isGrouped = isGroupedBillId(item.id);
+                        const endpoint = isGrouped && sectionAccount && sectionListType
+                          ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
+                          : isGrouped
+                            ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
+                            : `/api/bills/${item.id}`;
                         const res = await fetch(endpoint, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },

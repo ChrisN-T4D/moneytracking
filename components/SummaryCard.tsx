@@ -62,6 +62,7 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
     nextSpanishForkInflow,
     todayDate,
     upcomingBills = [],
+    upcomingTransfersOutOfChecking = [],
     autoTransfers = [],
     transferredThisCycleBonus,
   } = moneyStatus;
@@ -242,6 +243,7 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
         nextMonthName={nextMonthName}
         todayDate={todayDate}
         upcomingBills={upcomingBills}
+        upcomingTransfersOutOfChecking={upcomingTransfersOutOfChecking}
         nextPaycheckDate={moneyStatus.nextPaycheckDate}
         nextBillsInflowDate={nextBillsInflow?.date}
         nextSpanishForkInflowDate={nextSpanishForkInflow?.date}

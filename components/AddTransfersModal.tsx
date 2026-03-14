@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { formatCurrency } from "@/lib/format";
-import { getCardClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
 
 interface TransferStatement {
@@ -14,11 +13,42 @@ interface TransferStatement {
   account?: string | null;
   pairedStatementId?: string | null;
   goalId?: string | null;
+  /** Goal suggested by a statement_tag_rule (e.g. "ZELLE TO KERRIE" → Payback Kerrie); use when goalId is not set. */
+  suggestedGoalId?: string | null;
+  transferFromAccount?: string | null;
+  transferToAccount?: string | null;
+  /** When set, this transfer counts as this bill for "paid this month" (saved on statement in PB). */
+  targetType?: string | null;
+  targetSection?: string | null;
+  targetName?: string | null;
 }
 
 interface Goal {
   id: string;
   name: string;
+}
+
+export interface BillOption {
+  section: string;
+  listType: "bills" | "subscriptions";
+  name: string;
+}
+
+function billOptionValue(b: BillOption): string {
+  return `${b.section}|${b.listType}|${b.name}`;
+}
+function parseBillOptionValue(v: string): BillOption | null {
+  const parts = v.split("|");
+  if (parts.length < 3) return null;
+  return { section: parts[0]!, listType: parts[1] as "bills" | "subscriptions", name: parts.slice(2).join("|") };
+}
+
+/** Build BillOption from statement's stored targetType/targetSection/targetName when it's a bill-like tag. */
+function billTagFromStatement(t: TransferStatement): BillOption | null {
+  if (!t.targetType || !t.targetSection || !t.targetName) return null;
+  const listType: "bills" | "subscriptions" =
+    t.targetType === "subscription" ? "subscriptions" : "bills";
+  return { section: t.targetSection, listType, name: t.targetName };
 }
 
 type PairDraft = {
@@ -27,6 +57,8 @@ type PairDraft = {
   fromAccount: string;
   toAccount: string;
   goalId: string | null;
+  /** Count this outflow as a bill (for "paid this month") */
+  billTag: BillOption | null;
 };
 
 const ACCOUNT_OPTIONS = [
@@ -41,18 +73,23 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
   const { theme } = useTheme();
   const [items, setItems] = useState<TransferStatement[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [billOptions, setBillOptions] = useState<BillOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageIsError, setMessageIsError] = useState(false);
   const [pairs, setPairs] = useState<PairDraft[]>([]);
   const [selectingPairFor, setSelectingPairFor] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"paired" | "outflows" | "inflows">("outflows");
+  /** Per-statement metadata for unpaired items: goal, accounts, and optional bill tag (outflows) */
+  const [unpairedMeta, setUnpairedMeta] = useState<Record<string, { goalId: string | null; fromAccount: string; toAccount: string; billTag: BillOption | null }>>({});
 
   const fetchTransfers = useCallback(async () => {
     setLoading(true);
     setMessage("");
     try {
-      const res = await fetch("/api/statement-tags?transfersOnly=true");
-      const data = (await res.json()) as { ok?: boolean; items?: TransferStatement[]; goals?: Goal[]; message?: string };
+      const res = await fetch(`/api/statement-tags?transfersOnly=true&_t=${Date.now()}`, { cache: "no-store" });
+      const data = (await res.json()) as { ok?: boolean; items?: TransferStatement[]; goals?: Goal[]; billOptions?: BillOption[]; message?: string };
       if (!res.ok || data.ok === false) {
         setMessage(data.message ?? "Failed to load transfers.");
         return;
@@ -60,6 +97,7 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
       const transfers = data.items ?? [];
       setItems(transfers);
       setGoals(data.goals ?? []);
+      setBillOptions(data.billOptions ?? []);
 
       // Reconstruct existing pairs from pairedStatementId
       const existingPairs: PairDraft[] = [];
@@ -77,12 +115,34 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
               inId: inp.id,
               fromAccount: inferAccount(out) ?? "checking_account",
               toAccount: inferAccount(inp) ?? "bills_account",
-              goalId: out.goalId ?? inp.goalId ?? null,
+              goalId: out.goalId ?? inp.goalId ?? out.suggestedGoalId ?? inp.suggestedGoalId ?? null,
+              billTag: billTagFromStatement(out) ?? null,
             });
           }
         }
       }
       setPairs(existingPairs);
+
+      // Initialize unpaired metadata from loaded items
+      const unpairedIds = new Set<string>(transfers.map((t) => t.id));
+      for (const p of existingPairs) {
+        unpairedIds.delete(p.outId);
+        unpairedIds.delete(p.inId);
+      }
+      const nextMeta: Record<string, { goalId: string | null; fromAccount: string; toAccount: string; billTag: BillOption | null }> = {};
+      for (const id of unpairedIds) {
+        const t = transfers.find((i) => i.id === id);
+        if (!t) continue;
+        const fromAcc = t.transferFromAccount ?? (t.amount < 0 ? inferAccount(t) : null) ?? "checking_account";
+        const toAcc = t.transferToAccount ?? (t.amount >= 0 ? inferAccount(t) : null) ?? "bills_account";
+        nextMeta[id] = {
+          goalId: t.goalId ?? t.suggestedGoalId ?? null,
+          fromAccount: fromAcc,
+          toAccount: toAcc,
+          billTag: billTagFromStatement(t) ?? null,
+        };
+      }
+      setUnpairedMeta(nextMeta);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to load.");
     } finally {
@@ -121,6 +181,7 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
       fromAccount: inferAccount(out) ?? "checking_account",
       toAccount: inferAccount(inp) ?? "bills_account",
       goalId: null,
+      billTag: null,
     }]);
     setSelectingPairFor(null);
   }
@@ -133,30 +194,60 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
     setPairs((prev) => prev.map((p) => p.outId === outId ? { ...p, ...updates } : p));
   }
 
+  function updateUnpairedMeta(statementId: string, updates: Partial<{ goalId: string | null; fromAccount: string; toAccount: string; billTag: BillOption | null }>) {
+    setUnpairedMeta((prev) => ({
+      ...prev,
+      [statementId]: { ...(prev[statementId] ?? { goalId: null, fromAccount: "checking_account", toAccount: "bills_account", billTag: null }), ...updates },
+    }));
+  }
+
   async function savePairs() {
     setSaving(true);
     setMessage("");
+    setMessageIsError(false);
     try {
-      const pairsPayload = pairs.map((p) => ({
-        outStatementId: p.outId,
-        inStatementId: p.inId,
-        fromAccount: p.fromAccount,
-        toAccount: p.toAccount,
-        goalId: p.goalId,
-      }));
+      const pairsPayload = pairs.map((p) => {
+        const outItem = items.find((i) => i.id === p.outId);
+        return {
+          outStatementId: p.outId,
+          inStatementId: p.inId,
+          fromAccount: p.fromAccount,
+          toAccount: p.toAccount,
+          goalId: p.goalId ?? null,
+          outflowBillTag: p.billTag ?? undefined,
+          outflowDescription: outItem?.description ?? undefined,
+        };
+      });
+      const unpairedPayload = unpaired.map((s) => {
+        const meta = unpairedMeta[s.id] ?? { goalId: null, fromAccount: "checking_account", toAccount: "bills_account", billTag: null };
+        return {
+          statementId: s.id,
+          goalId: meta.goalId ?? null,
+          fromAccount: s.amount < 0 ? meta.fromAccount : undefined,
+          toAccount: s.amount >= 0 ? meta.toAccount : undefined,
+          billTag: meta.billTag ?? undefined,
+          description: s.description ?? undefined,
+        };
+      });
       const res = await fetch("/api/transfer-pairs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairs: pairsPayload }),
+        body: JSON.stringify({ pairs: pairsPayload, unpaired: unpairedPayload }),
       });
       const data = (await res.json()) as { ok?: boolean; message?: string; saved?: number };
       if (!res.ok || data.ok === false) {
-        setMessage(data.message ?? "Save failed.");
+        const msg = data.message ?? "Save failed.";
+        setMessage(msg);
+        setMessageIsError(true);
+        console.error("[AddTransfers] Save failed:", res.status, msg);
       } else {
-        setMessage(`Saved ${data.saved ?? pairs.length} transfer pairs.`);
+        const totalSaved = data.saved ?? pairs.length + unpaired.length;
+        setMessage(`Saved ${totalSaved} item${totalSaved !== 1 ? "s" : ""}.`);
+        setMessageIsError(false);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Save failed.");
+      setMessageIsError(true);
     } finally {
       setSaving(false);
     }
@@ -186,148 +277,227 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
           </button>
         </div>
 
+        {/* Tabs */}
+        {!loading && items.length > 0 && (
+          <div className="shrink-0 flex border-b border-neutral-200 dark:border-neutral-700">
+            {([
+              { key: "paired" as const, label: "Paired", count: pairs.length },
+              { key: "outflows" as const, label: "Outflows", count: outflows.length },
+              { key: "inflows" as const, label: "Inflows", count: inflows.length },
+            ]).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => { setActiveTab(tab.key); setSelectingPairFor(null); }}
+                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                  activeTab === tab.key
+                    ? "text-sky-600 dark:text-sky-400 border-b-2 border-sky-600 dark:border-sky-400"
+                    : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300"
+                }`}
+              >
+                {tab.label} ({tab.count})
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
           {loading && <p className="text-sm text-neutral-500">Loading transfer statements...</p>}
-          {message && <p className="text-xs text-amber-600 dark:text-amber-400">{message}</p>}
+          {message && (
+            <p className={`text-sm ${messageIsError ? "text-red-600 dark:text-red-400 font-medium" : "text-emerald-600 dark:text-emerald-400"}`}>
+              {message}
+            </p>
+          )}
 
-          {/* Paired transfers */}
-          {pairs.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider mb-2">Paired Transfers ({pairs.length})</h3>
-              <div className="space-y-2">
-                {pairs.map((p) => {
-                  const out = items.find((i) => i.id === p.outId);
-                  const inp = items.find((i) => i.id === p.inId);
-                  if (!out || !inp) return null;
-                  return (
-                    <div key={p.outId} className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-3 space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0 text-xs space-y-1">
-                          <div className="flex gap-2 items-center">
-                            <span className="text-red-600 dark:text-red-400 font-medium tabular-nums">{formatCurrency(Math.abs(out.amount))}</span>
-                            <span className="text-neutral-400">→</span>
-                            <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{formatCurrency(inp.amount)}</span>
-                            <span className="text-neutral-500">{formatDate(out.date)}</span>
+          {/* Paired transfers tab */}
+          {activeTab === "paired" && (
+            <>
+              {pairs.length === 0 ? (
+                <p className="text-sm text-neutral-500 text-center py-6">No paired transfers yet. Go to Outflows and click &ldquo;Pair&rdquo; on an outflow to match it with an inflow.</p>
+              ) : (
+                <div className="space-y-2">
+                  {pairs.map((p) => {
+                    const out = items.find((i) => i.id === p.outId);
+                    const inp = items.find((i) => i.id === p.inId);
+                    if (!out || !inp) return null;
+                    return (
+                      <div key={p.outId} className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0 text-xs space-y-1">
+                            <div className="flex gap-2 items-center">
+                              <span className="text-red-600 dark:text-red-400 font-medium tabular-nums">{formatCurrency(Math.abs(out.amount))}</span>
+                              <span className="text-neutral-400">→</span>
+                              <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{formatCurrency(inp.amount)}</span>
+                              <span className="text-neutral-500">{formatDate(out.date)}</span>
+                            </div>
+                            <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={out.description}>{out.description}</p>
+                            <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={inp.description}>{inp.description}</p>
                           </div>
-                          <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={out.description}>{out.description}</p>
-                          <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={inp.description}>{inp.description}</p>
+                          <button type="button" onClick={() => removePair(p.outId)} className="text-xs text-red-500 hover:text-red-600 shrink-0">Remove</button>
                         </div>
-                        <button type="button" onClick={() => removePair(p.outId)} className="text-xs text-red-500 hover:text-red-600 shrink-0">Remove</button>
-                      </div>
-                      <div className="flex flex-wrap gap-2 text-xs">
-                        <div className="flex items-center gap-1">
-                          <span className="text-neutral-500">From:</span>
-                          <select
-                            value={p.fromAccount}
-                            onChange={(e) => updatePair(p.outId, { fromAccount: e.target.value })}
-                            className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs"
-                          >
-                            {ACCOUNT_OPTIONS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-                          </select>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="text-neutral-500">To:</span>
-                          <select
-                            value={p.toAccount}
-                            onChange={(e) => updatePair(p.outId, { toAccount: e.target.value })}
-                            className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs"
-                          >
-                            {ACCOUNT_OPTIONS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-                          </select>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="text-neutral-500">Goal:</span>
-                          <select
-                            value={p.goalId ?? ""}
-                            onChange={(e) => updatePair(p.outId, { goalId: e.target.value || null })}
-                            className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs"
-                          >
-                            <option value="">No goal</option>
-                            {goals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                          </select>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">From:</span>
+                            <select value={p.fromAccount} onChange={(e) => updatePair(p.outId, { fromAccount: e.target.value })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              {ACCOUNT_OPTIONS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">To:</span>
+                            <select value={p.toAccount} onChange={(e) => updatePair(p.outId, { toAccount: e.target.value })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              {ACCOUNT_OPTIONS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">Goal:</span>
+                            <select value={p.goalId ?? ""} onChange={(e) => updatePair(p.outId, { goalId: e.target.value || null })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              <option value="">No goal</option>
+                              {goals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">Count as bill:</span>
+                            <select value={p.billTag ? billOptionValue(p.billTag) : ""} onChange={(e) => updatePair(p.outId, { billTag: e.target.value ? parseBillOptionValue(e.target.value) : null })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs min-w-[140px]">
+                              <option value="">—</option>
+                              {billOptions.map((b) => <option key={billOptionValue(b)} value={billOptionValue(b)}>{b.name}</option>)}
+                            </select>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Unpaired outflows */}
-          {outflows.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider mb-2">Outflows (unpaired)</h3>
-              <div className="space-y-1">
-                {outflows.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-100 dark:border-neutral-800 last:border-0">
-                    <div className="flex-1 min-w-0 text-xs">
-                      <div className="flex gap-2 items-center">
-                        <span className="text-red-600 dark:text-red-400 font-medium tabular-nums">{formatCurrency(Math.abs(s.amount))}</span>
-                        <span className="text-neutral-500">{formatDate(s.date)}</span>
-                      </div>
-                      <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={s.description}>{s.description}</p>
-                    </div>
-                    {selectingPairFor === s.id ? (
-                      <button type="button" onClick={() => setSelectingPairFor(null)} className="text-xs text-neutral-500 hover:text-neutral-700 shrink-0">Cancel</button>
-                    ) : (
-                      <button type="button" onClick={() => setSelectingPairFor(s.id)} className="text-xs text-sky-600 hover:text-sky-500 shrink-0">Pair</button>
-                    )}
+          {/* Outflows tab */}
+          {activeTab === "outflows" && (
+            <>
+              {/* Inflow picker overlay (when pairing) */}
+              {selectingPairFor && inflows.length > 0 && (
+                <div className="rounded-lg border-2 border-sky-400 dark:border-sky-600 p-3">
+                  <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2">Select the matching inflow:</p>
+                  <div className="space-y-1">
+                    {inflows.map((s) => {
+                      const outItem = items.find((i) => i.id === selectingPairFor);
+                      const amountMatch = outItem && Math.abs(Math.abs(outItem.amount) - s.amount) < 0.01;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => createPair(selectingPairFor!, s.id)}
+                          className={`w-full text-left flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-sky-50 dark:hover:bg-sky-900/30 transition-colors ${amountMatch ? "bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-700" : ""}`}
+                        >
+                          <div className="flex-1 min-w-0 text-xs">
+                            <div className="flex gap-2 items-center">
+                              <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{formatCurrency(s.amount)}</span>
+                              <span className="text-neutral-500">{formatDate(s.date)}</span>
+                              {amountMatch && <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Amount match</span>}
+                            </div>
+                            <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate">{s.description}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </div>
+              )}
 
-          {/* Select inflow to pair (shown when selectingPairFor is set) */}
-          {selectingPairFor && inflows.length > 0 && (
-            <div className="rounded-lg border-2 border-sky-400 dark:border-sky-600 p-3">
-              <p className="text-xs font-medium text-sky-700 dark:text-sky-300 mb-2">Select the matching inflow:</p>
-              <div className="space-y-1">
-                {inflows.map((s) => {
-                  const outItem = items.find((i) => i.id === selectingPairFor);
-                  const amountMatch = outItem && Math.abs(Math.abs(outItem.amount) - s.amount) < 0.01;
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => createPair(selectingPairFor!, s.id)}
-                      className={`w-full text-left flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-sky-50 dark:hover:bg-sky-900/30 transition-colors ${amountMatch ? "bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-700" : ""}`}
-                    >
-                      <div className="flex-1 min-w-0 text-xs">
-                        <div className="flex gap-2 items-center">
-                          <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{formatCurrency(s.amount)}</span>
-                          <span className="text-neutral-500">{formatDate(s.date)}</span>
-                          {amountMatch && <span className="text-[10px] text-emerald-600 dark:text-emerald-400">Amount match</span>}
+              {outflows.length === 0 ? (
+                <p className="text-sm text-neutral-500 text-center py-6">No unpaired outflows.</p>
+              ) : (
+                <div className="space-y-2">
+                  {outflows.map((s) => {
+                    const meta = unpairedMeta[s.id] ?? { goalId: null, fromAccount: "checking_account", toAccount: "bills_account", billTag: null };
+                    return (
+                      <div key={s.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-2 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0 text-xs">
+                            <div className="flex gap-2 items-center">
+                              <span className="text-red-600 dark:text-red-400 font-medium tabular-nums">{formatCurrency(Math.abs(s.amount))}</span>
+                              <span className="text-neutral-500">{formatDate(s.date)}</span>
+                            </div>
+                            <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={s.description}>{s.description}</p>
+                          </div>
+                          {selectingPairFor === s.id ? (
+                            <button type="button" onClick={() => setSelectingPairFor(null)} className="text-xs text-neutral-500 hover:text-neutral-700 shrink-0">Cancel</button>
+                          ) : (
+                            <button type="button" onClick={() => setSelectingPairFor(s.id)} className="text-xs text-sky-600 hover:text-sky-500 shrink-0">Pair</button>
+                          )}
                         </div>
-                        <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate">{s.description}</p>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">From:</span>
+                            <select value={meta.fromAccount} onChange={(e) => updateUnpairedMeta(s.id, { fromAccount: e.target.value })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              {ACCOUNT_OPTIONS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">Goal:</span>
+                            <select value={meta.goalId ?? ""} onChange={(e) => updateUnpairedMeta(s.id, { goalId: e.target.value || null })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              <option value="">No goal</option>
+                              {goals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">Count as bill:</span>
+                            <select value={meta.billTag ? billOptionValue(meta.billTag) : ""} onChange={(e) => updateUnpairedMeta(s.id, { billTag: e.target.value ? parseBillOptionValue(e.target.value) : null })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs min-w-[140px]">
+                              <option value="">—</option>
+                              {billOptions.map((b) => <option key={billOptionValue(b)} value={billOptionValue(b)}>{b.name}</option>)}
+                            </select>
+                          </div>
+                        </div>
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Unpaired inflows (when not selecting) */}
-          {!selectingPairFor && inflows.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider mb-2">Inflows (unpaired)</h3>
-              <div className="space-y-1">
-                {inflows.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-100 dark:border-neutral-800 last:border-0">
-                    <div className="flex-1 min-w-0 text-xs">
-                      <div className="flex gap-2 items-center">
-                        <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{formatCurrency(s.amount)}</span>
-                        <span className="text-neutral-500">{formatDate(s.date)}</span>
+          {/* Inflows tab */}
+          {activeTab === "inflows" && (
+            <>
+              {inflows.length === 0 ? (
+                <p className="text-sm text-neutral-500 text-center py-6">No unpaired inflows.</p>
+              ) : (
+                <div className="space-y-2">
+                  {inflows.map((s) => {
+                    const meta = unpairedMeta[s.id] ?? { goalId: null, fromAccount: "checking_account", toAccount: "bills_account", billTag: null };
+                    return (
+                      <div key={s.id} className="rounded-lg border border-neutral-200 dark:border-neutral-700 p-2 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0 text-xs">
+                            <div className="flex gap-2 items-center">
+                              <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{formatCurrency(s.amount)}</span>
+                              <span className="text-neutral-500">{formatDate(s.date)}</span>
+                            </div>
+                            <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={s.description}>{s.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">To:</span>
+                            <select value={meta.toAccount} onChange={(e) => updateUnpairedMeta(s.id, { toAccount: e.target.value })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              {ACCOUNT_OPTIONS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-neutral-500">Goal:</span>
+                            <select value={meta.goalId ?? ""} onChange={(e) => updateUnpairedMeta(s.id, { goalId: e.target.value || null })} className="rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-1.5 py-0.5 text-xs">
+                              <option value="">No goal</option>
+                              {goals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                            </select>
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-[11px] text-neutral-600 dark:text-neutral-400 truncate" title={s.description}>{s.description}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
 
           {!loading && items.length === 0 && (
@@ -336,7 +506,7 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
         </div>
 
         {/* Footer */}
-        {pairs.length > 0 && (
+        {(pairs.length > 0 || unpaired.length > 0) && (
           <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800 px-4 py-2 flex items-center justify-between">
             <span className="text-xs text-neutral-500">{pairs.length} pair{pairs.length !== 1 ? "s" : ""} · {unpaired.length} unpaired</span>
             <button
@@ -345,7 +515,7 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
               disabled={saving}
               className="rounded-lg bg-emerald-600 text-white px-4 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
             >
-              {saving ? "Saving…" : `Save ${pairs.length} pair${pairs.length !== 1 ? "s" : ""}`}
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         )}

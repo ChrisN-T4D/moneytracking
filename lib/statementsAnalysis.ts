@@ -19,8 +19,8 @@ const PAYCHECK_DESCRIPTIONS = [
   /nwosu/i,          // NWOSU Payroll, Nwosu Payroll Payroll, etc.
 ];
 
-function isPaycheckLike(description: string): boolean {
-  return PAYCHECK_DESCRIPTIONS.some((re) => re.test(description));
+function isPaycheckLike(description: string | null | undefined): boolean {
+  return PAYCHECK_DESCRIPTIONS.some((re) => re.test(String(description ?? "")));
 }
 
 /** Recurring transfer descriptions we treat as auto_transfers (whatFor). */
@@ -117,15 +117,17 @@ function inferFrequency(dates: string[]): "biweekly" | "monthly" | "monthlyLastW
 }
 
 /** Infer a display name for a deposit (paycheck, rental, etc.). Exported for income-tag suggestions. */
-export function inferPaycheckName(description: string): string {
-  if (/gusto/i.test(description)) return "Gusto Payroll";
-  if (/integris\s*health/i.test(description)) return "Integris Health";
-  if (/pershing/i.test(description)) return "Pershing (Brokerage)";
-  if (/quest\s*diagnos/i.test(description)) return "Quest Diagnostic (Deposit)";
-  if (/nwosu/i.test(description)) return "NWOSU Payroll";
-  if (/direct\s*dep|dir\s*dep/i.test(description)) return "Direct Deposit";
-  if (/rental|advantage\s*management|property\s*management/i.test(description)) return "Rental management";
-  return description.slice(0, 40).trim() || "Variable income";
+export function inferPaycheckName(description: string | null | undefined): string {
+  const d = String(description ?? "").trim();
+  if (!d) return "Variable income";
+  if (/gusto/i.test(d)) return "Gusto Payroll";
+  if (/integris\s*health/i.test(d)) return "Integris Health";
+  if (/pershing/i.test(d)) return "Pershing (Brokerage)";
+  if (/quest\s*diagnos/i.test(d)) return "Quest Diagnostic (Deposit)";
+  if (/nwosu/i.test(d)) return "NWOSU Payroll";
+  if (/direct\s*dep|dir\s*dep/i.test(d)) return "Direct Deposit";
+  if (/rental|advantage\s*management|property\s*management/i.test(d)) return "Rental management";
+  return d.slice(0, 40).trim() || "Variable income";
 }
 
 /** Infer auto-transfer whatFor from description (for tagging transfer statements). Returns null if no match. */
@@ -274,7 +276,7 @@ export function suggestPaychecksFromStatements(statements: StatementRecord[]): S
 
   for (const row of deposits) {
     if (!isPaycheckLike(row.description)) continue;
-    const name = inferPaycheckName(row.description);
+    const name = inferPaycheckName(row.description ?? "");
     const key = name.toLowerCase().replace(/\s+/g, "_");
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push(row);
@@ -288,7 +290,7 @@ export function suggestPaychecksFromStatements(statements: StatementRecord[]): S
     const dates = rows.map((r) => r.date).filter(Boolean);
     const frequency = inferFrequency(dates);
     const lastDate = latestDateString(dates);
-    const name = inferPaycheckName(rows[0]!.description);
+    const name = inferPaycheckName(rows[0]?.description ?? "");
     suggested.push({
       name,
       frequency,
@@ -340,7 +342,7 @@ export function suggestAutoTransfersFromStatements(statements: StatementRecord[]
   const byWhatFor = new Map<string, StatementRecord[]>();
 
   for (const row of statements) {
-    const desc = row.description;
+    const desc = row.description ?? "";
     let whatFor: string | null = null;
     for (const { re, whatFor: w } of [...AUTO_TRANSFER_FROM, ...AUTO_TRANSFER_TO]) {
       if (re.test(desc)) {
@@ -380,8 +382,8 @@ export function suggestAutoTransfersFromStatements(statements: StatementRecord[]
 }
 
 /** Normalize withdrawal description to a bill name for grouping. */
-export function billNameFromDescription(description: string): string {
-  const s = description.trim();
+export function billNameFromDescription(description: string | null | undefined): string {
+  const s = String(description ?? "").trim();
   if (/\bFreedom\s*Mtg|Freedom\s*Mtg/i.test(s)) return "Freedom Mortgage";
   if (/\bState\s*Farm/i.test(s)) return "State Farm";
   if (/\bDominion\s*Energy/i.test(s)) return "Dominion Energy";
@@ -406,12 +408,20 @@ export function billNameFromDescription(description: string): string {
 
 function inferBillFrequency(dates: string[]): "2weeks" | "monthly" | "yearly" {
   if (dates.length < 2) return "monthly";
-  const parsed = dates.map((d) => new Date(d).getTime()).sort((a, b) => a - b);
+  const parsed = dates
+    .map((d) => new Date(d).getTime())
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (parsed.length < 2) return "monthly";
   const gaps: number[] = [];
-  for (let i = 1; i < parsed.length; i++) gaps.push((parsed[i] - parsed[i - 1]) / (24 * 60 * 60 * 1000));
+  for (let i = 1; i < parsed.length; i++) {
+    const gap = (parsed[i]! - parsed[i - 1]!) / (24 * 60 * 60 * 1000);
+    if (Number.isFinite(gap)) gaps.push(gap);
+  }
+  if (gaps.length === 0) return "monthly";
   const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-  if (avgGap >= 300) return "yearly";
-  if (avgGap >= 25 && avgGap <= 35) return "monthly";
+  if (Number.isFinite(avgGap) && avgGap >= 300) return "yearly";
+  if (Number.isFinite(avgGap) && avgGap >= 25 && avgGap <= 35) return "monthly";
   return "2weeks";
 }
 
@@ -458,7 +468,7 @@ export function suggestBillsFromStatements(statements: StatementRecord[]): Sugge
   const byKey = new Map<string, StatementRecord[]>();
 
   for (const row of withdrawals) {
-    const name = billNameFromDescription(row.description);
+    const name = billNameFromDescription(row.description ?? "");
     const key = name.toLowerCase().replace(/\s+/g, "_");
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push(row);
@@ -472,7 +482,7 @@ export function suggestBillsFromStatements(statements: StatementRecord[]): Sugge
     const dates = rows.map((r) => r.date).filter(Boolean);
     const frequency = inferBillFrequency(dates);
     const lastDate = latestDateString(dates);
-    const name = billNameFromDescription(rows[0]!.description);
+    const name = billNameFromDescription(rows[0]?.description ?? "");
     const suggestedGroup = suggestBillGroup(name);
     suggested.push({ name, frequency, amount, count: rows.length, lastDate, suggestedGroup });
   }

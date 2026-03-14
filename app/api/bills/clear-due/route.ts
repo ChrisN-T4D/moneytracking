@@ -64,5 +64,7 @@ export async function PATCH(request: Request) {
     if (res.ok) updated++;
   }
 
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/");
   return NextResponse.json({ ok: true, updated });
 }

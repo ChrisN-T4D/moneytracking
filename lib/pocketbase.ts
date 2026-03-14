@@ -326,10 +326,11 @@ export function groupBillsBySubsection(bills: BillOrSubWithMeta[]): {
 } {
   const byKey = new Map<string, BillOrSubWithMeta[]>();
   for (const b of bills) {
-    const key =
+    const base =
       b.subsection && b.subsection.trim()
         ? b.subsection.trim()
         : normalizeKeyForGrouping(b.name);
+    const key = `${base}|${b.name ?? b.id}`;
     const list = byKey.get(key) ?? [];
     list.push(b);
     byKey.set(key, list);
@@ -584,13 +585,26 @@ interface PbStatement {
   sourceFile?: string | null;
   goalId?: string | null;
   goal_id?: string | null;
+  pairedStatementId?: string | null;
+  transferFromAccount?: string | null;
+  transferToAccount?: string | null;
+  targetType?: string | null;
+  targetSection?: string | null;
+  targetName?: string | null;
 }
 
 function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
   return (items ?? []).map((item) => {
     const raw = item as unknown as Record<string, unknown>;
-    const goalIdRaw = raw.goalId ?? raw.goal_id ?? null;
+    const goalIdRaw = raw.goalId ?? raw.goalid ?? raw.goal_id ?? null;
     const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
+    const pairedRaw = raw.pairedStatementId ?? raw.paired_statement_id ?? raw.pairedstatementid ?? null;
+    const pairedStatementId = pairedRaw != null && String(pairedRaw).trim() !== "" ? String(pairedRaw).trim() : null;
+    const fromAcc = raw.transferFromAccount ?? raw.trasnferFromAccount ?? raw.transfer_from_account ?? null;
+    const toAcc = raw.transferToAccount ?? raw.transfer_to_account ?? null;
+    const tt = raw.targetType ?? raw.target_type ?? null;
+    const ts = raw.targetSection ?? raw.target_section ?? null;
+    const tn = raw.targetName ?? raw.target_name ?? null;
     const dateRaw = raw.date ?? raw.Date ?? "";
     const descRaw = raw.description ?? raw.desc ?? raw.Description ?? "";
     const amountRaw = raw.amount ?? raw.Amount;
@@ -604,6 +618,12 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
       account: item.account ?? null,
       sourceFile: item.sourceFile ?? null,
       goalId,
+      pairedStatementId,
+      transferFromAccount: fromAcc != null && String(fromAcc).trim() !== "" ? String(fromAcc).trim() : null,
+      transferToAccount: toAcc != null && String(toAcc).trim() !== "" ? String(toAcc).trim() : null,
+      targetType: tt != null && String(tt).trim() !== "" ? (String(tt).trim() as StatementRecord["targetType"]) : null,
+      targetSection: ts != null && String(ts).trim() !== "" ? (String(ts).trim() as StatementRecord["targetSection"]) : null,
+      targetName: tn != null && String(tn).trim() !== "" ? String(tn).trim() : null,
     };
   });
 }

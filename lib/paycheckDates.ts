@@ -243,7 +243,16 @@ export function getNextDueAndPaycheck(
     return { nextDue: (nextDueStr ?? "").trim() || formatDateToYYYYMMDD(ref), inThisPaycheck: false };
   }
   const nextDue = formatDateToYYYYMMDD(next);
-  const inThisPaycheck =
-    biweeklyEnd != null ? next >= ref && next <= biweeklyEnd : isDueInNextTwoWeeks(next, ref);
+  // Bills due on the same day as the paycheck are not "needed before next income" (income lands that day).
+  // Use day before pay date as inclusive end so pay-day bills are never counted (avoids timezone/edge issues).
+  const nextDay = toLocalDay(next);
+  let inThisPaycheck: boolean;
+  if (biweeklyEnd != null) {
+    const dayBeforePay = new Date(biweeklyEnd.getFullYear(), biweeklyEnd.getMonth(), biweeklyEnd.getDate());
+    dayBeforePay.setDate(dayBeforePay.getDate() - 1);
+    inThisPaycheck = nextDay >= ref && nextDay <= dayBeforePay;
+  } else {
+    inThisPaycheck = isDueInNextTwoWeeks(next, ref);
+  }
   return { nextDue, inThisPaycheck };
 }

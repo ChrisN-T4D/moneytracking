@@ -293,6 +293,9 @@ export async function createCollections(
         textField("account", false),
         textField("sourceFile", false),
         textField("goalId", false),
+        textField("pairedStatementId", false),
+        textField("transferFromAccount", false),
+        textField("transferToAccount", false),
       ],
     },
     {

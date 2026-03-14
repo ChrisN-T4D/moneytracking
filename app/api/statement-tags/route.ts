@@ -55,12 +55,24 @@ async function getStatementsForTagging(): Promise<StatementRecord[]> {
             sourceFile?: string | null;
             goalId?: string | null;
             goal_id?: string | null;
+            pairedStatementId?: string | null;
+            transferFromAccount?: string | null;
+            transfer_from_account?: string | null;
+            transferToAccount?: string | null;
+            transfer_to_account?: string | null;
           }>;
         };
         return (data.items ?? []).map((item) => {
           const raw = item as Record<string, unknown>;
-          const goalIdRaw = raw.goalId ?? raw.goal_id ?? null;
+          const goalIdRaw = raw.goalId ?? raw.goalid ?? raw.goal_id ?? null;
           const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
+          const pairedRaw = raw.pairedStatementId ?? raw.paired_statement_id ?? raw.pairedstatementid ?? null;
+          const pairedStatementId = pairedRaw != null && String(pairedRaw).trim() !== "" ? String(pairedRaw).trim() : null;
+          const fromAcc = raw.transferFromAccount ?? raw.trasnferFromAccount ?? raw.transfer_from_account ?? null;
+          const toAcc = raw.transferToAccount ?? raw.transfer_to_account ?? null;
+          const tt = raw.targetType ?? raw.target_type ?? null;
+          const ts = raw.targetSection ?? raw.target_section ?? null;
+          const tn = raw.targetName ?? raw.target_name ?? null;
           return {
             id: item.id,
             date: item.date ?? "",
@@ -71,6 +83,12 @@ async function getStatementsForTagging(): Promise<StatementRecord[]> {
             account: item.account ?? null,
             sourceFile: item.sourceFile ?? null,
             goalId,
+            pairedStatementId,
+            transferFromAccount: fromAcc != null && String(fromAcc).trim() !== "" ? String(fromAcc).trim() : null,
+            transferToAccount: toAcc != null && String(toAcc).trim() !== "" ? String(toAcc).trim() : null,
+            targetType: tt != null && String(tt).trim() !== "" ? String(tt).trim() : null,
+            targetSection: ts != null && String(ts).trim() !== "" ? String(ts).trim() : null,
+            targetName: tn != null && String(tn).trim() !== "" ? String(tn).trim() : null,
           };
         });
       }
@@ -242,19 +260,53 @@ export async function GET(request: Request) {
     if (transfersOnly) {
       const transferStatements = statements.filter((s) => isTransferDescription(s.description ?? ""));
       const { pairMap } = findTransferPairs(statements);
-      const transferItems = transferStatements.map((s) => ({
-        id: s.id,
-        date: s.date,
-        description: s.description,
-        amount: s.amount,
-        account: s.account ?? null,
-        pairedStatementId: pairMap.get(s.id) ?? null,
-        goalId: s.goalId ?? null,
-      }));
+      const transferItems = transferStatements.map((s) => {
+        const matched = matchRule(rules, s);
+        const suggestedGoalId = matched?.rule?.goalId && String(matched.rule.goalId).trim() ? String(matched.rule.goalId).trim() : null;
+        // Prefer stored pairedStatementId from PocketBase so past work shows; fall back to heuristic pair
+        const pairedId = s.pairedStatementId ?? pairMap.get(s.id) ?? null;
+        return {
+          id: s.id,
+          date: s.date,
+          description: s.description,
+          amount: s.amount,
+          account: s.account ?? null,
+          pairedStatementId: pairedId,
+          goalId: s.goalId ?? null,
+          suggestedGoalId: suggestedGoalId ?? undefined,
+          transferFromAccount: s.transferFromAccount ?? null,
+          transferToAccount: s.transferToAccount ?? null,
+          targetType: s.targetType ?? null,
+          targetSection: s.targetSection ?? null,
+          targetName: s.targetName ?? null,
+        };
+      });
+      // Bill options for "Count as bill" dropdown (outgoing transfers)
+      const billOptions: { section: string; listType: "bills" | "subscriptions"; name: string }[] = [];
+      for (const bill of bills) {
+        const name = bill.name?.trim();
+        if (!name) continue;
+        const rawList = (bill.listType ?? "").toLowerCase();
+        const listType: "bills" | "subscriptions" =
+          rawList === "subscription" || rawList === "subscriptions" ? "subscriptions" : "bills";
+        const rawAccount = (bill.account ?? "").toLowerCase();
+        const section = rawAccount.includes("bill") ? "bills_account" : "checking_account";
+        if (!billOptions.some((b) => b.section === section && b.listType === listType && b.name === name)) {
+          billOptions.push({ section, listType, name });
+        }
+      }
+      for (const sf of spanishForkBills) {
+        const name = sf.name?.trim();
+        if (name && !billOptions.some((b) => b.section === "spanish_fork" && b.name === name)) {
+          billOptions.push({ section: "spanish_fork", listType: "bills", name });
+        }
+      }
+      billOptions.sort((a, b) => a.name.localeCompare(b.name));
       return NextResponse.json({
         ok: true,
         items: transferItems,
         goals: goals.map((g) => ({ id: g.id, name: g.name })),
+        billOptions,
       });
     }
 
@@ -421,7 +473,7 @@ export async function POST(request: Request) {
             const data = (await res.json()) as { items?: Array<{ id: string; date?: string; description?: string; amount?: number; balance?: number | null; category?: string | null; account?: string | null; sourceFile?: string | null; goalId?: string | null; goal_id?: string | null }> };
             statements = (data.items ?? []).map((item) => {
               const raw = item as Record<string, unknown>;
-              const gid = raw.goalId ?? raw.goal_id;
+              const gid = raw.goalId ?? raw.goalid ?? raw.goal_id;
               const goalId = gid != null && String(gid).trim() !== "" ? String(gid).trim() : null;
               return {
                 id: item.id,
@@ -521,22 +573,49 @@ export async function POST(request: Request) {
       if (prevGoalId) affectedGoalIds.add(prevGoalId);
       if (goalId) affectedGoalIds.add(goalId);
 
-      // Save goalId to statement record (always PATCH so we can clear goal when user selects "No goal")
+      // Save goalId and bill tag to statement (same fields as Add Transfers "Count as bill") so
+      // "paid this month" works the same whether tagged from Add items to bills or Add Transfers.
+      const isBillLike =
+        (targetType === "bill" || targetType === "subscription" || targetType === "spanish_fork" || targetType === "variable_expense") &&
+        targetSection &&
+        targetName;
+      const statementPatchCamel = {
+        goalId: goalId ?? "",
+        targetType: isBillLike ? targetType : "",
+        targetSection: isBillLike ? targetSection : "",
+        targetName: isBillLike ? targetName : "",
+      };
+      const statementPatchLower = {
+        goalid: goalId ?? "",
+        targettype: isBillLike ? targetType : "",
+        targetsection: isBillLike ? targetSection : "",
+        targetname: isBillLike ? targetName : "",
+      };
       try {
-        const patchRes = await fetch(
+        let patchRes = await fetch(
           `${statementPatchBase}/api/collections/statements/records/${item.statementId}`,
           {
             method: "PATCH",
             headers: statementPatchHeaders,
-            body: JSON.stringify({ goalId }),
+            body: JSON.stringify(statementPatchCamel),
           }
         );
+        if (!patchRes.ok && patchRes.status === 400) {
+          patchRes = await fetch(
+            `${statementPatchBase}/api/collections/statements/records/${item.statementId}`,
+            {
+              method: "PATCH",
+              headers: statementPatchHeaders,
+              body: JSON.stringify(statementPatchLower),
+            }
+          );
+        }
         if (!patchRes.ok) {
           const errText = await patchRes.text();
-          console.error(`Failed to save goalId to statement ${item.statementId}: ${patchRes.status} ${errText}`);
+          console.error(`Failed to save statement tag ${item.statementId}: ${patchRes.status} ${errText}`);
         }
       } catch (err) {
-        console.error(`Failed to save goalId to statement ${item.statementId}:`, err);
+        console.error(`Failed to save statement tag ${item.statementId}:`, err);
       }
 
       // Upsert rule: match on pattern only for now.
@@ -687,11 +766,18 @@ export async function POST(request: Request) {
           let page = 1;
           const perPage = 500;
           while (true) {
-            const filter = encodeURIComponent(`goalId="${gid}"`);
-            const res = await fetch(
+            let filter = encodeURIComponent(`goalid="${gid}"`);
+            let res = await fetch(
               `${adminBase}/api/collections/statements/records?filter=${filter}&perPage=${perPage}&page=${page}&sort=-date`,
               { cache: "no-store", headers: statementPatchHeaders }
             );
+            if (!res.ok) {
+              filter = encodeURIComponent(`goalId="${gid}"`);
+              res = await fetch(
+                `${adminBase}/api/collections/statements/records?filter=${filter}&perPage=${perPage}&page=${page}&sort=-date`,
+                { cache: "no-store", headers: statementPatchHeaders }
+              );
+            }
             if (!res.ok) break;
             const data = (await res.json()) as { items?: Array<{ amount?: number }>; totalItems?: number };
             const items = data.items ?? [];

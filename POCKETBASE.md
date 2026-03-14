@@ -148,18 +148,30 @@ If you already use this for paychecks, keep it. Fields: `name`, `frequency` (`bi
 
 One record per transaction row from an uploaded statement CSV. Used by **http://localhost:3001/statements** when you upload CSVs.
 
-| Field       | Type       | Required | Notes |
-|------------|------------|----------|--------|
-| date       | Plain text | yes      | Transaction date (e.g. "2026-02-15") |
-| description| Plain text | yes      | Payee / memo |
-| amount     | Number     | yes      | Positive = credit, negative = debit |
-| balance    | Number     | no       | Running balance after transaction |
-| category   | Plain text | no       | Category label |
-| account    | Plain text | no       | Which account (e.g. "Checking") |
-| sourceFile | Plain text | no       | Original CSV filename |
-| goalId     | Plain text | no       | Optional goal ID this statement contributes to (relation to `goals` collection) |
+| Field                | Type       | Required | Notes |
+|----------------------|------------|----------|--------|
+| date                 | Plain text | yes      | Transaction date (e.g. "2026-02-15") |
+| description          | Plain text | yes      | Payee / memo |
+| amount               | Number     | yes      | Positive = credit, negative = debit |
+| balance              | Number     | no       | Running balance after transaction |
+| category             | Plain text | no       | Category label |
+| account              | Plain text | no       | Which account (e.g. "Checking") |
+| sourceFile           | Plain text | no       | Original CSV filename |
+| goalId               | Plain text | no       | Optional goal ID this statement contributes to (relation to `goals` collection) |
+| pairedStatementId    | Plain text | no       | For transfers: ID of the other leg of the pair (outflow ↔ inflow) |
+| transferFromAccount  | Plain text | no       | For transfers: account money left (e.g. `checking_account`) |
+| transferToAccount    | Plain text | no       | For transfers: account money went to (e.g. `bills_account`) |
+| targetType           | Plain text | no       | When set: this row counts as this type for "paid this month" — one of: `bill`, `subscription`, `spanish_fork`, `variable_expense` |
+| targetSection        | Plain text | no       | Section for that bill (e.g. `checking_account`, `bills_account`, `spanish_fork`) |
+| targetName           | Plain text | no       | Bill/sub name (subsection) |
 
-Set **Create** rule so the app can POST new records when importing (e.g. allow create). **List** rule for read if you want to show statements in the app. **Update** rule so the app can set `goalId` when tagging statements.
+Set **Create** rule so the app can POST new records when importing (e.g. allow create). **List** rule for read if you want to show statements in the app. **Update** rule so the app can set `goalId`, `pairedStatementId`, `transferFromAccount`, and `transferToAccount` when tagging or pairing transfers (or use admin auth — see below).
+
+**Count as bill / goal / transfer not saving?** The app saves goal, pairing, and "Count as bill" via **PATCH** on `statements` using **admin auth** (`POCKETBASE_ADMIN_EMAIL` + `POCKETBASE_ADMIN_PASSWORD`). Check:
+
+1. **Fields exist** — In PocketBase admin: **Collections** → **statements** → **Fields**. You must have: **goalId**, **pairedStatementId**, **transferFromAccount**, **transferToAccount**. For "Count as bill" in Add Transfers, also add: **targetType**, **targetSection**, **targetName** (Plain text, not required). If any are missing, add them (type Plain text, not required).
+2. **Admin auth** — In `.env.local` set `POCKETBASE_ADMIN_EMAIL` and `POCKETBASE_ADMIN_PASSWORD` to your PocketBase admin login. The transfer-pairs API uses this to PATCH; without it, save will fail.
+3. **Update rule (if not using admin)** — If you don’t use admin auth, the **statements** collection **Update** rule must allow updates (e.g. leave empty to allow, or add a rule that permits the request).
 
 ---
 

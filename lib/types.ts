@@ -106,6 +106,16 @@ export interface StatementRecord {
   sourceFile?: string | null;
   /** Optional goal id this statement contributes to (PocketBase `goals` collection). */
   goalId?: string | null;
+  /** Id of the paired statement (other leg of the transfer). */
+  pairedStatementId?: string | null;
+  /** Transfer out of this account (for transfer statements). */
+  transferFromAccount?: string | null;
+  /** Transfer into this account (for transfer statements). */
+  transferToAccount?: string | null;
+  /** When set, this statement counts as this bill for "paid this month" (same as Add items to bills). */
+  targetType?: StatementTagTargetType | null;
+  targetSection?: BillListAccount | "spanish_fork" | null;
+  targetName?: string | null;
 }
 
 /** Learned rule for tagging statement rows into sections/types. */

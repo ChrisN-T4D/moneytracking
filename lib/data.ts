@@ -45,6 +45,8 @@ export const checkingAccountBills: BillOrSub[] = [
   { id: "c7", name: "Chris 401k", frequency: "monthly", nextDue: "2026-03-25", inThisPaycheck: true, amount: 0, autoTransferNote: "See Autotransfer Table" },
   { id: "c8", name: "Harmonee Lunch", frequency: "monthly", nextDue: "2026-04-01", inThisPaycheck: false, amount: 75, autoTransferNote: "See Autotransfer Table" },
   { id: "c9", name: "Piano Tuition", frequency: "monthly", nextDue: "2026-04-01", inThisPaycheck: false, amount: 80, autoTransferNote: "See Autotransfer Table" },
+  { id: "c10", name: "Chris Fun Money", frequency: "2weeks", nextDue: "2026-03-27", inThisPaycheck: true, amount: 0, autoTransferNote: "See Autotransfer Table" },
+  { id: "c11", name: "Melodee Fun Money", frequency: "2weeks", nextDue: "2026-03-27", inThisPaycheck: true, amount: 0, autoTransferNote: "See Autotransfer Table" },
 ];
 
 // Subscriptions (Checking Account) — charge date and frequency from PDF

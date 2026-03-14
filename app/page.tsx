@@ -8,6 +8,7 @@ import { HeaderAuth } from "@/components/HeaderAuth";
 import { AuthenticatedContent } from "@/components/AuthenticatedContent";
 import { DraggableSectionCards } from "@/components/DraggableSectionCards";
 import { RecurringTab } from "@/components/RecurringTab";
+import { AccountLevelsTab } from "@/components/AccountLevelsTab";
 import { TabLayout } from "@/components/TabLayout";
 import {
   initialSummary,
@@ -49,6 +50,7 @@ import {
   expectedPaychecksThisMonthDetail,
   computeMoneyStatus,
   getNextAutoTransferInByAccount,
+  getUpcomingTransfersOutOfChecking,
   transferredThisCycleByAccount,
   type MoneyStatusWithExtras,
   type MoneyStatusExtras,
@@ -481,6 +483,11 @@ export default async function Home() {
     (paidThisMonthByBill.get("checking_account|bills|gas") ?? 0) +
     (paidThisMonthByBill.get("checking_account|bills|groceries & gas") ?? 0);
 
+  const upcomingTransfersOutOfChecking =
+    nextPaycheckEntry?.date != null
+      ? getUpcomingTransfersOutOfChecking(transfersForAuto, today, nextPaycheckEntry.date)
+      : [];
+
   const extras: MoneyStatusExtras = {
     incomeNextMonth,
     nextMonthName,
@@ -509,6 +516,7 @@ export default async function Home() {
     nextSpanishForkInflow: nextSpanishForkInflow ?? null,
     todayDate: today,
     upcomingBills,
+    upcomingTransfersOutOfChecking,
     autoTransfers: transfersForAuto,
     transferredThisCycleBonus,
   };
@@ -619,7 +627,7 @@ function MainContent({
         <div className="absolute inset-0 bg-gradient-to-br from-sky-50/80 via-white/60 to-neutral-50/80 dark:from-neutral-900/90 dark:via-neutral-950/90 dark:to-neutral-950/90" />
       </div>
       {/* Header - sticky on mobile */}
-      <header className="sticky top-0 z-50 bg-neutral-100/95 dark:bg-neutral-900/95 backdrop-blur supports-[backdrop-filter]:bg-neutral-100/80 dark:supports-[backdrop-filter]:bg-neutral-900/80 border-b border-neutral-200 dark:border-neutral-800 px-4 pt-10 pb-3 safe-area-inset-top">
+      <header className="sticky top-0 z-50 bg-neutral-100/95 dark:bg-neutral-900/95 backdrop-blur supports-[backdrop-filter]:bg-neutral-100/80 dark:supports-[backdrop-filter]:bg-neutral-900/80 border-b border-neutral-200 dark:border-neutral-800 pl-4 pr-safe pt-safe pb-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100 shrink-0">
             Neu Money Tracking
@@ -634,7 +642,7 @@ function MainContent({
         </p>
       </header>
 
-      <div className="relative z-10 p-4 space-y-6 max-w-2xl mx-auto">
+      <div className="relative z-10 pl-4 pr-safe pt-4 pb-4 space-y-6 max-w-2xl mx-auto">
         <GoalsProvider initialGoals={goals} goalStatementsById={goalStatementsById}>
           <TabLayout
             recurringContent={
@@ -647,6 +655,7 @@ function MainContent({
                 paidThisMonthByAccount={moneyStatus.paidThisMonth}
                 incomeThisMonth={incomeThisMonthToDate ?? 0}
                 today={today}
+                requiredThisPaycheckByAccount={moneyStatus.requiredThisPaycheckByAccount}
               />
             }
             goalsContent={<GoalsSection />}
@@ -668,10 +677,11 @@ function MainContent({
                 const paidByName: Record<string, number> = {};
                 const breakdownByName: Record<string, import("@/lib/statementTagging").ActualBreakdownItem[]> = {};
                 for (const b of filtered) {
-                  const groupKey =
+                  const base =
                     b.subsection && b.subsection.trim()
                       ? b.subsection.trim()
                       : normalizeKeyForGrouping(b.name);
+                  const groupKey = `${base}|${b.name ?? b.id}`;
                   const displayName = groupKeyToDisplayName.get(groupKey) ?? b.name;
                   const nameLower = b.name.toLowerCase();
                   // Primary lookup: exact section+name match
@@ -710,6 +720,8 @@ function MainContent({
                     breakdownByName={breakdownByName}
                     canDelete
                     paycheckEndDate={paycheckEndDate}
+                    sectionAccount={section.account}
+                    sectionListType={section.listType}
                   />
                 );
               }
@@ -856,6 +868,7 @@ function MainContent({
         )}
               </div>
             }
+            accountsContent={<AccountLevelsTab moneyStatus={moneyStatus} />}
           />
         </GoalsProvider>
       </div>
