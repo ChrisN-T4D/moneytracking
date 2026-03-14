@@ -41,6 +41,8 @@ interface TagSuggestion {
   date: string;
   description: string;
   amount: number;
+  pairedStatementId?: string;
+  isTransferPairPrimary?: boolean;
   suggestion: {
     targetType: StatementTagTargetType;
     targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
@@ -371,15 +373,24 @@ export default function StatementsPage() {
     setTagStatus("saving");
     setTagMessage("");
     try {
-      const items = tagSuggestions.map((t) => {
+      const items: Array<{ statementId: string; targetType: StatementTagTargetType; targetSection: "bills_account" | "checking_account" | "spanish_fork" | null; targetName: string }> = [];
+      for (const t of tagSuggestions) {
         const edit = tagEdits[t.id] ?? t.suggestion;
-        return {
+        items.push({
           statementId: t.id,
           targetType: edit.targetType,
           targetSection: edit.targetSection,
-          targetName: edit.targetName, // This IS the subsection/name in PocketBase
-        };
-      });
+          targetName: edit.targetName,
+        });
+        if (t.pairedStatementId && t.isTransferPairPrimary) {
+          items.push({
+            statementId: t.pairedStatementId,
+            targetType: edit.targetType,
+            targetSection: edit.targetSection,
+            targetName: edit.targetName,
+          });
+        }
+      }
       const res = await fetch("/api/statement-tags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

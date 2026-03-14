@@ -5,7 +5,7 @@ import type {
   BillListAccount,
   BillListType,
 } from "./types";
-import { suggestBillGroup, billNameFromDescription, isTransferDescription, inferPaycheckName, inferAutoTransferWhatFor } from "./statementsAnalysis";
+import { suggestBillGroup, billNameFromDescription, isTransferDescription, inferPaycheckName, inferAutoTransferWhatFor, findTransferPairs } from "./statementsAnalysis";
 
 /** One suggestion row for the tagging wizard. */
 export interface StatementTagSuggestion {
@@ -276,18 +276,20 @@ export function getVariableIncomeThisMonth(
   return sum;
 }
 
-/** whatFor names of auto transfers that have at least one statement tagged as auto_transfer in the same calendar month as refDate. */
+/** whatFor names of auto transfers that have at least one statement tagged as auto_transfer in the same calendar month as refDate. Counts each pair once (primary leg only). */
 export function getAutoTransfersMatchedThisCycle(
   statements: StatementRecord[],
   rules: StatementTagRule[],
   refDate: Date
 ): string[] {
+  const { primaryIds, pairMap } = findTransferPairs(statements);
   const refY = refDate.getFullYear();
   const refM = refDate.getMonth();
   const matched = new Set<string>();
   for (const s of statements) {
     const m = matchRule(rules, s);
     if (!m || m.rule.targetType !== "auto_transfer") continue;
+    if (pairMap.has(s.id) && !primaryIds.has(s.id)) continue;
     const whatFor = (m.rule.targetName ?? "").trim();
     if (!whatFor) continue;
     const d = new Date(s.date);

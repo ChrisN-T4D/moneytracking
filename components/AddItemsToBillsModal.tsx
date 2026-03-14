@@ -14,6 +14,8 @@ interface TagSuggestion {
   date: string;
   description: string;
   amount: number;
+  pairedStatementId?: string;
+  isTransferPairPrimary?: boolean;
   suggestion: {
     targetType: StatementTagTargetType;
     targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
@@ -258,7 +260,18 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     setTagStatus("saving");
     setTagMessage("");
     try {
-      const items = toSave.map((t) => {
+      const items: Array<{
+        statementId: string;
+        description: string;
+        amount: number;
+        targetType: StatementTagTargetType;
+        targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
+        targetName: string;
+        goalId: string | null;
+        wasAutoTagged?: boolean;
+        originalSuggestion?: unknown;
+      }> = [];
+      for (const t of toSave) {
         const edit = tagEdits[t.id] ?? t.suggestion;
         const wasAutoTagged = edit.wasAutoTagged ?? false;
         const originalSuggestion = edit.originalSuggestion;
@@ -266,18 +279,34 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
           (originalSuggestion.targetType !== edit.targetType ||
            originalSuggestion.targetSection !== edit.targetSection ||
            originalSuggestion.targetName !== edit.targetName);
-        return {
+        items.push({
           statementId: t.id,
-          description: t.description, // sent so server doesn't need to re-fetch
-          amount: t.amount,           // sent so server doesn't need to re-fetch
+          description: t.description,
+          amount: t.amount,
           targetType: edit.targetType,
           targetSection: edit.targetSection,
           targetName: edit.targetName,
           goalId: edit.goalId ?? null,
           wasAutoTagged: wasOverride ? true : undefined,
           originalSuggestion: wasOverride ? originalSuggestion : undefined,
-        };
-      });
+        });
+        if (t.pairedStatementId && t.isTransferPairPrimary) {
+          const other = tagSuggestions.find((r) => r.id === t.pairedStatementId);
+          if (other) {
+            items.push({
+              statementId: other.id,
+              description: other.description,
+              amount: other.amount,
+              targetType: edit.targetType,
+              targetSection: edit.targetSection,
+              targetName: edit.targetName,
+              goalId: edit.goalId ?? null,
+              wasAutoTagged: wasOverride ? true : undefined,
+              originalSuggestion: wasOverride ? originalSuggestion : undefined,
+            });
+          }
+        }
+      }
       const res = await fetch("/api/statement-tags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -291,7 +320,10 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       }
       setSavedIds((prev) => {
         const next = new Set(prev);
-        toSave.forEach((t) => next.add(t.id));
+        toSave.forEach((t) => {
+          next.add(t.id);
+          if (t.pairedStatementId) next.add(t.pairedStatementId);
+        });
         return next;
       });
       // Populate subsection dropdown for other rows: add saved targetNames to customSubsectionsByGroup
@@ -332,7 +364,18 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
     let totalSaved = 0;
     while (unsaved.length > 0) {
       const batch = unsaved.slice(0, BATCH_SIZE);
-      const items = batch.map((t) => {
+      const items: Array<{
+        statementId: string;
+        description: string;
+        amount: number;
+        targetType: StatementTagTargetType;
+        targetSection: "bills_account" | "checking_account" | "spanish_fork" | null;
+        targetName: string;
+        goalId: string | null;
+        wasAutoTagged?: boolean;
+        originalSuggestion?: unknown;
+      }> = [];
+      for (const t of batch) {
         const edit = tagEdits[t.id] ?? t.suggestion;
         const wasAutoTagged = edit.wasAutoTagged ?? false;
         const originalSuggestion = edit.originalSuggestion;
@@ -340,7 +383,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
           (originalSuggestion.targetType !== edit.targetType ||
            originalSuggestion.targetSection !== edit.targetSection ||
            originalSuggestion.targetName !== edit.targetName);
-        return {
+        const item = {
           statementId: t.id,
           description: t.description,
           amount: t.amount,
@@ -351,7 +394,19 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
           wasAutoTagged: wasOverride ? true : undefined,
           originalSuggestion: wasOverride ? originalSuggestion : undefined,
         };
-      });
+        items.push(item);
+        if (t.pairedStatementId && t.isTransferPairPrimary) {
+          const other = tagSuggestions.find((r) => r.id === t.pairedStatementId);
+          if (other) {
+            items.push({
+              ...item,
+              statementId: other.id,
+              description: other.description,
+              amount: other.amount,
+            });
+          }
+        }
+      }
       const res = await fetch("/api/statement-tags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -363,7 +418,10 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
         setTagMessage(data.message ?? "Save failed.");
         return;
       }
-      batch.forEach((t) => saved.add(t.id));
+      batch.forEach((t) => {
+        saved.add(t.id);
+        if (t.pairedStatementId) saved.add(t.pairedStatementId);
+      });
       setSavedIds(new Set(saved));
       totalSaved += batch.length;
       setTagMessage(`Saved ${totalSaved} of ${all.length}…`);
@@ -632,6 +690,9 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                         <div className="flex-shrink-0 text-xs font-medium tabular-nums text-neutral-700 dark:text-neutral-300 w-14 text-right">
                           {row.amount.toFixed(2)}
                         </div>
+                        {row.pairedStatementId && (
+                          <span className="text-[10px] text-neutral-500 dark:text-neutral-400" title="Part of a transfer (both legs get the same tag)">Transfer (2 legs)</span>
+                        )}
                         {hasMatchedRule && !isSaved && (
                           <span
                             className={`text-[10px] font-medium ${
@@ -757,6 +818,9 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
                               <div className="flex-shrink-0 text-xs font-medium tabular-nums text-neutral-700 dark:text-neutral-300 w-14 text-right">
                                 {row.amount.toFixed(2)}
                               </div>
+                              {row.pairedStatementId && (
+                                <span className="text-[10px] text-neutral-500 dark:text-neutral-400" title="Part of a transfer (both legs get the same tag)">Transfer (2 legs)</span>
+                              )}
                               <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Saved</span>
                               <div className="flex-shrink-0 flex items-center gap-1 flex-wrap w-full sm:w-auto">
                                 <select

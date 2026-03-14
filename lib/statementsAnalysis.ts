@@ -138,6 +138,61 @@ export function inferAutoTransferWhatFor(description: string): string | null {
   return null;
 }
 
+export interface TransferPairInfo {
+  /** For each statement id that is in a pair, maps to the other leg's id. */
+  pairMap: Map<string, string>;
+  /** Ids of the primary leg (amount > 0) of each pair; use to count each pair once. */
+  primaryIds: Set<string>;
+}
+
+/** Normalize statement date to YYYY-MM-DD for pairing. */
+function normalizeDateForPair(dateStr: string): string | null {
+  const s = (dateStr ?? "").trim();
+  if (!s) return null;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Pair transfer legs: same date, opposite amount, both transfer descriptions.
+ * Primary = leg with amount > 0. Use primaryIds to count each pair once for auto-transfer recording.
+ */
+export function findTransferPairs(statements: StatementRecord[]): TransferPairInfo {
+  const pairMap = new Map<string, string>();
+  const primaryIds = new Set<string>();
+
+  const transferRows = statements.filter((s) => isTransferDescription(s.description ?? ""));
+  const keyToRows = new Map<string, StatementRecord[]>();
+
+  for (const s of transferRows) {
+    const dateKey = normalizeDateForPair(s.date);
+    if (!dateKey) continue;
+    const absAmount = Math.round(Math.abs(s.amount) * 100) / 100;
+    const groupKey = `${dateKey}|${absAmount}`;
+    if (!keyToRows.has(groupKey)) keyToRows.set(groupKey, []);
+    keyToRows.get(groupKey)!.push(s);
+  }
+
+  for (const rows of keyToRows.values()) {
+    const positive = rows.filter((s) => s.amount > 0);
+    const negative = rows.filter((s) => s.amount < 0);
+    const n = Math.min(positive.length, negative.length);
+    for (let i = 0; i < n; i++) {
+      const pos = positive[i]!;
+      const neg = negative[i]!;
+      pairMap.set(pos.id, neg.id);
+      pairMap.set(neg.id, pos.id);
+      primaryIds.add(pos.id);
+    }
+  }
+
+  return { pairMap, primaryIds };
+}
+
 export interface SuggestedPaycheck {
   name: string;
   frequency: "biweekly" | "monthly" | "monthlyLastWorkingDay";
@@ -281,6 +336,7 @@ export function getLatestPaycheckDateForName(
  * Group recurring transfers by whatFor and infer auto_transfers.
  */
 export function suggestAutoTransfersFromStatements(statements: StatementRecord[]): SuggestedAutoTransfer[] {
+  const { primaryIds, pairMap } = findTransferPairs(statements);
   const byWhatFor = new Map<string, StatementRecord[]>();
 
   for (const row of statements) {
@@ -293,6 +349,7 @@ export function suggestAutoTransfersFromStatements(statements: StatementRecord[]
       }
     }
     if (!whatFor) continue;
+    if (pairMap.has(row.id) && !primaryIds.has(row.id)) continue;
     const key = whatFor;
     if (!byWhatFor.has(key)) byWhatFor.set(key, []);
     byWhatFor.get(key)!.push(row);

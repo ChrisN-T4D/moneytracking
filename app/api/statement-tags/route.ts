@@ -16,6 +16,7 @@ import type {
   BillListType,
 } from "@/lib/types";
 import { suggestTagsForStatements, makeStatementPattern, matchRule } from "@/lib/statementTagging";
+import { findTransferPairs } from "@/lib/statementsAnalysis";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
 
@@ -270,39 +271,51 @@ export async function GET() {
     const suggestions = suggestTagsForStatements(needsReview, rules);
     const taggedSuggestions = suggestTagsForStatements(alreadyTagged, rules);
 
+    const { pairMap, primaryIds } = findTransferPairs(statements);
+
     const payload = [
       // Untagged rows first
-      ...suggestions.map((s) => ({
-        id: s.statement.id,
-        date: s.statement.date,
-        description: s.statement.description,
-        amount: s.statement.amount,
-        suggestion: {
-          targetType: s.targetType,
-          targetSection: s.targetSection,
-          targetName: s.targetName,
-          goalId: s.goalId ?? s.statement.goalId ?? null,
-          confidence: s.confidence ?? "LOW",
-          matchType: s.matchType ?? "heuristic",
-          hasMatchedRule: false,
-        },
-      })),
+      ...suggestions.map((s) => {
+        const stId = s.statement.id;
+        return {
+          id: stId,
+          date: s.statement.date,
+          description: s.statement.description,
+          amount: s.statement.amount,
+          pairedStatementId: pairMap.get(stId) ?? undefined,
+          isTransferPairPrimary: primaryIds.has(stId),
+          suggestion: {
+            targetType: s.targetType,
+            targetSection: s.targetSection,
+            targetName: s.targetName,
+            goalId: s.goalId ?? s.statement.goalId ?? null,
+            confidence: s.confidence ?? "LOW",
+            matchType: s.matchType ?? "heuristic",
+            hasMatchedRule: false,
+          },
+        };
+      }),
       // Already-tagged rows (hidden by default, shown via toggle)
-      ...taggedSuggestions.map((s) => ({
-        id: s.statement.id,
-        date: s.statement.date,
-        description: s.statement.description,
-        amount: s.statement.amount,
-        suggestion: {
-          targetType: s.targetType,
-          targetSection: s.targetSection,
-          targetName: s.targetName,
-          goalId: s.goalId ?? s.statement.goalId ?? null,
-          confidence: s.confidence ?? "HIGH",
-          matchType: s.matchType ?? "exact_pattern",
-          hasMatchedRule: true,
-        },
-      })),
+      ...taggedSuggestions.map((s) => {
+        const stId = s.statement.id;
+        return {
+          id: stId,
+          date: s.statement.date,
+          description: s.statement.description,
+          amount: s.statement.amount,
+          pairedStatementId: pairMap.get(stId) ?? undefined,
+          isTransferPairPrimary: primaryIds.has(stId),
+          suggestion: {
+            targetType: s.targetType,
+            targetSection: s.targetSection,
+            targetName: s.targetName,
+            goalId: s.goalId ?? s.statement.goalId ?? null,
+            confidence: s.confidence ?? "HIGH",
+            matchType: s.matchType ?? "exact_pattern",
+            hasMatchedRule: true,
+          },
+        };
+      }),
     ];
 
     console.log(`[statement-tags GET] Returning ${payload.length} suggestions`);
