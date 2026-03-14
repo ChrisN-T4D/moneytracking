@@ -154,6 +154,9 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
   const [items, setItems] = useState<BillOrSub[]>(() => sortBills(initialItems));
   const [edit, setEdit] = useState<EditState | null>(null);
   const [breakdownModal, setBreakdownModal] = useState<{ name: string; items: ActualBreakdownItem[] } | null>(null);
+  const [dateEditModal, setDateEditModal] = useState<{ item: BillOrSub } | null>(null);
+  const [dateEditValue, setDateEditValue] = useState("");
+  const [dateEditSaving, setDateEditSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -163,6 +166,14 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
   useEffect(() => {
     setItems(sortBills(initialItems));
   }, [initialItems, paidByName, breakdownByName]);
+
+  // Sync date picker value when date-edit modal opens
+  useEffect(() => {
+    if (dateEditModal) {
+      const d = dateEditModal.item.nextDue?.trim();
+      setDateEditValue(d ? d.slice(0, 10) : "");
+    }
+  }, [dateEditModal]);
 
   const requiredAmount = budgetedTotal ?? items.reduce((sum, i) => sum + (i.amount ?? 0), 0);
   const showHeaderAmounts = requiredAmount > 0 || requiredThisPaycheck != null || currentAmountInAccount != null;
@@ -362,7 +373,18 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       }
 
                       if (!item.nextDue) {
-                        return <span className="text-neutral-400 dark:text-neutral-500">—</span>;
+                        return canDelete ? (
+                          <button
+                            type="button"
+                            title="Set next due date"
+                            onClick={() => setDateEditModal({ item })}
+                            className="text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 hover:underline underline-offset-2 text-sm font-medium text-left"
+                          >
+                            —
+                          </button>
+                        ) : (
+                          <span className="text-neutral-400 dark:text-neutral-500">—</span>
+                        );
                       }
 
                       const dueDate = new Date(item.nextDue);
@@ -375,24 +397,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       return canDelete ? (
                         <button
                           type="button"
-                          title="Click to clear next due date (for ongoing spending trackers)"
-                          onClick={async () => {
-                            const prev = item.nextDue;
-                            setItems((cur) => cur.map((i) => i.id === item.id ? { ...i, nextDue: "" } : i));
-                            try {
-                              const endpoint = isGroupedBillId(item.id)
-                                ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
-                                : `/api/bills/${item.id}`;
-                              const res = await fetch(endpoint, {
-                                method: "PATCH",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ nextDue: "" }),
-                              });
-                              if (!res.ok) setItems((cur) => cur.map((i) => i.id === item.id ? { ...i, nextDue: prev } : i));
-                            } catch {
-                              setItems((cur) => cur.map((i) => i.id === item.id ? { ...i, nextDue: prev } : i));
-                            }
-                          }}
+                          title="Change next due date"
+                          onClick={() => setDateEditModal({ item })}
                           className={`text-left font-medium text-sm ${dateColor} hover:underline underline-offset-2 transition-colors`}
                         >
                           {dueDateStr}
@@ -613,6 +619,131 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     </div>
                   );
                 })()}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {dateEditModal &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex min-h-[100dvh] items-center justify-center bg-neutral-950/70 p-4 backdrop-blur-sm"
+            onClick={() => !dateEditSaving && setDateEditModal(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="date-edit-modal-title"
+          >
+            <div
+              className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl max-w-sm w-full border border-neutral-200 dark:border-neutral-700 overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700">
+                <h3 id="date-edit-modal-title" className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                  Next due date: {dateEditModal.item.name}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => !dateEditSaving && setDateEditModal(null)}
+                  className="rounded-lg p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  aria-label="Close"
+                  disabled={dateEditSaving}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6L18 18M18 6L6 18" />
+                  </svg>
+                </button>
+              </div>
+              <div className="p-4 space-y-4">
+                <div>
+                  <label htmlFor="date-edit-input" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    Date
+                  </label>
+                  <input
+                    id="date-edit-input"
+                    type="date"
+                    value={dateEditValue}
+                    onChange={(e) => setDateEditValue(e.target.value)}
+                    disabled={dateEditSaving}
+                    className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const nextDue = dateEditValue.trim() ? dateEditValue.trim().slice(0, 10) : "";
+                      if (!nextDue) return;
+                      setDateEditSaving(true);
+                      const prev = dateEditModal.item.nextDue;
+                      try {
+                        const item = dateEditModal.item;
+                        const endpoint = isGroupedBillId(item.id)
+                          ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
+                          : `/api/bills/${item.id}`;
+                        const res = await fetch(endpoint, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ nextDue }),
+                        });
+                        if (res.ok) {
+                          setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue } : i)));
+                          setDateEditModal(null);
+                          router.refresh();
+                        } else {
+                          setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
+                        }
+                      } finally {
+                        setDateEditSaving(false);
+                      }
+                    }}
+                    disabled={dateEditSaving || !dateEditValue.trim()}
+                    className="rounded-lg bg-emerald-600 text-white px-3 py-2 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {dateEditSaving ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setDateEditSaving(true);
+                      const item = dateEditModal.item;
+                      const prev = item.nextDue;
+                      try {
+                        const endpoint = isGroupedBillId(item.id)
+                          ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
+                          : `/api/bills/${item.id}`;
+                        const res = await fetch(endpoint, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ nextDue: "" }),
+                        });
+                        if (res.ok) {
+                          setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: "" } : i)));
+                          setDateEditModal(null);
+                          setDateEditValue("");
+                          router.refresh();
+                        } else {
+                          setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
+                        }
+                      } finally {
+                        setDateEditSaving(false);
+                      }
+                    }}
+                    disabled={dateEditSaving}
+                    className="rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 px-3 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+                  >
+                    Clear date
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => !dateEditSaving && setDateEditModal(null)}
+                    disabled={dateEditSaving}
+                    className="rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 px-3 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           </div>,

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 const POCKETBASE_API_URL = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim();
 
-/** PATCH /api/bills/clear-due?name=... — clears nextDue on all bills matching the given name. */
+/** PATCH /api/bills/clear-due?name=... — sets or clears nextDue on all bills matching the given name. Body: { nextDue?: string } (omit or "" to clear). */
 export async function PATCH(request: Request) {
   const base = getPbBase();
   if (!base) return NextResponse.json({ ok: false, message: "PocketBase URL not configured." }, { status: 500 });
@@ -14,6 +14,16 @@ export async function PATCH(request: Request) {
   const url = new URL(request.url);
   const name = url.searchParams.get("name")?.trim();
   if (!name) return NextResponse.json({ ok: false, message: "name query param required." }, { status: 400 });
+
+  let nextDueValue = "";
+  try {
+    const body = (await request.json().catch(() => ({}))) as { nextDue?: string };
+    if (body.nextDue !== undefined && body.nextDue !== null) {
+      nextDueValue = String(body.nextDue).trim();
+    }
+  } catch {
+    // no body or invalid — keep clear behavior
+  }
 
   const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
   const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
@@ -26,7 +36,7 @@ export async function PATCH(request: Request) {
     token = r.token;
     resolvedBase = r.baseUrl.replace(/\/$/, "");
   } catch {
-    return NextResponse.json({ ok: false, message: "Admin auth required to clear due dates." }, { status: 401 });
+    return NextResponse.json({ ok: false, message: "Admin auth required to update due dates." }, { status: 401 });
   }
 
   // Fetch all bills matching this name
@@ -49,7 +59,7 @@ export async function PATCH(request: Request) {
     const res = await fetch(`${resolvedBase}/api/collections/bills/records/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ nextDue: "" }),
+      body: JSON.stringify({ nextDue: nextDueValue }),
     });
     if (res.ok) updated++;
   }
