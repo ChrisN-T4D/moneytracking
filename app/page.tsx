@@ -540,6 +540,8 @@ export default async function Home() {
           paycheckEndDate={biweeklyEnd ?? null}
           spanishForkGrossNeed={predictedNeedRaw.spanishFork}
           tenantRentMonthly={summary.spanishForkTenantRentMonthly ?? null}
+          incomeThisMonthToDate={incomeThisMonthToDate}
+          variableIncomeThisMonth={variableIncomeThisMonth}
         />
       </AuthenticatedContent>
   );
@@ -570,6 +572,8 @@ function MainContent({
   paycheckEndDate,
   spanishForkGrossNeed,
   tenantRentMonthly,
+  incomeThisMonthToDate,
+  variableIncomeThisMonth,
 }: {
   hasPb: boolean;
   today: Date;
@@ -595,6 +599,8 @@ function MainContent({
   paycheckEndDate: Date | null;
   spanishForkGrossNeed: number;
   tenantRentMonthly: number | null;
+  incomeThisMonthToDate?: number;
+  variableIncomeThisMonth?: number;
 }) {
   return (
     <main className="min-h-screen pb-safe relative">

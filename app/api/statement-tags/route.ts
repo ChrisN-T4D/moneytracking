@@ -16,7 +16,6 @@ import type {
   BillListType,
 } from "@/lib/types";
 import { suggestTagsForStatements, makeStatementPattern, matchRule } from "@/lib/statementTagging";
-import { isTransferDescription } from "@/lib/statementsAnalysis";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
 
@@ -246,7 +245,7 @@ export async function GET() {
         subsections: { bills: [], subscriptions: [] },
         billNames: {},
         goals: goals.map((g) => ({ id: g.id, name: g.name })),
-        autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? t.name ?? "" })),
+        autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? "" })),
         message: hasAdmin
           ? "No statements found in PocketBase. Import some statements first using the upload form above."
           : "No statements found. Import some statements first. If statements exist but aren't showing, set POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD in .env.local.",
@@ -313,7 +312,7 @@ export async function GET() {
       subsections: subsectionsByType,
       billNames: billNamesByGroup,
       goals: goals.map((g) => ({ id: g.id, name: g.name })),
-      autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? t.name ?? "" })),
+      autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? "" })),
     });
   } catch (e) {
     console.error("GET /api/statement-tags error:", e);
