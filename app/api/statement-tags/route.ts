@@ -86,8 +86,14 @@ async function getStatementsForTagging(): Promise<StatementRecord[]> {
             pairedStatementId,
             transferFromAccount: fromAcc != null && String(fromAcc).trim() !== "" ? String(fromAcc).trim() : null,
             transferToAccount: toAcc != null && String(toAcc).trim() !== "" ? String(toAcc).trim() : null,
-            targetType: tt != null && String(tt).trim() !== "" ? String(tt).trim() : null,
-            targetSection: ts != null && String(ts).trim() !== "" ? String(ts).trim() : null,
+            targetType:
+              tt != null && String(tt).trim() !== ""
+                ? (String(tt).trim() as StatementTagTargetType)
+                : null,
+            targetSection:
+              ts != null && String(ts).trim() !== ""
+                ? (String(ts).trim() as StatementRecord["targetSection"])
+                : null,
             targetName: tn != null && String(tn).trim() !== "" ? String(tn).trim() : null,
           };
         });
