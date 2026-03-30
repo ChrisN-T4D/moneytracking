@@ -1,11 +1,45 @@
 /**
  * Build a unified list of recurring events (income + expenses) for a given month.
  * Used by the Recurring tab's calendar and list views.
+ *
+ * Bill expense dates match the Bills tab: same subsection grouping (earliest next due per group).
+ * "Paid" in this tab is manual only (`recurringPaidCycle` on each bill), not statement-driven.
  */
-import type { BillOrSub, AutoTransfer, SpanishForkBill, PaycheckConfig } from "./types";
-import type { BillOrSubWithMeta } from "./pocketbase";
-import { expectedPaychecksThisMonthDetail } from "./summaryCalculations";
+import type {
+  BillListAccount,
+  BillListType,
+  BillOrSub,
+  AutoTransfer,
+  SpanishForkBill,
+  PaycheckConfig,
+  MoneyGoal,
+} from "./types";
+import {
+  filterBillsWithMeta,
+  groupBillsBySubsection,
+  isSyntheticBillSubsectionKey,
+  type BillOrSubWithMeta,
+} from "./pocketbase";
+import { spanishForkMortgageDisplayName } from "./mortgageBillNames";
+import { goalsForBillName, creditAmountForMarkPaid } from "./goalRouting";
+import { expectedPaychecksThisMonthDetail, allPayDatesNearMonth } from "./summaryCalculations";
 import { parseFlexibleDate, getNextAutoTransferDate } from "./paycheckDates";
+import {
+  recurringCycleKeyForExpense,
+  isManualRecurringPaidForKey,
+} from "./recurringPaidCycle";
+
+export interface RecurringManualPaidMeta {
+  cycleKey: string;
+  collection: "bills" | "spanish_fork_bills";
+  ids: string[];
+  goalCandidates: { id: string; name: string }[];
+  membersForCredit: { name: string; amount: number }[];
+  lineAmount: number;
+  storedGoalId: string | null;
+  storedStatementId: string | null;
+  appliedCreditAmount: number;
+}
 
 export interface RecurringEvent {
   id: string;
@@ -18,6 +52,8 @@ export interface RecurringEvent {
   amount: number;
   recurrence: string;
   isPaid?: boolean;
+  /** When set, user can mark / unmark paid for this cycle (PocketBase). */
+  manualPaid?: RecurringManualPaidMeta;
 }
 
 function toYMD(d: Date): string {
@@ -47,7 +83,6 @@ function billDatesInMonth(bill: BillOrSub, year: number, month: number): string[
 
   const freq = (bill.frequency ?? "monthly").toLowerCase();
   if (freq === "2weeks") {
-    // Walk backwards to find first occurrence on or before the month, then forward
     const d = new Date(due.getTime());
     while (d > last) d.setDate(d.getDate() - 14);
     while (d < first) d.setDate(d.getDate() + 14);
@@ -60,7 +95,6 @@ function billDatesInMonth(bill: BillOrSub, year: number, month: number): string[
       results.push(toYMD(due));
     }
   } else {
-    // Monthly: clamp day to month
     const day = due.getDate();
     const clampedDay = Math.min(day, last.getDate());
     const d = new Date(year, month, clampedDay);
@@ -83,6 +117,13 @@ function transferFromAccount(destAccount: string): string | undefined {
   return undefined;
 }
 
+const BILL_SECTIONS: readonly (readonly [BillListAccount, BillListType])[] = [
+  ["bills_account", "bills"],
+  ["bills_account", "subscriptions"],
+  ["checking_account", "bills"],
+  ["checking_account", "subscriptions"],
+];
+
 export function buildRecurringEvents(
   paycheckConfigs: PaycheckConfig[],
   billsWithMeta: BillOrSubWithMeta[],
@@ -90,13 +131,13 @@ export function buildRecurringEvents(
   autoTransfers: AutoTransfer[],
   year: number,
   month: number,
-  paidByBillKey?: Map<string, number>
+  goals: Pick<MoneyGoal, "id" | "name" | "category">[] = []
 ): RecurringEvent[] {
   const events: RecurringEvent[] = [];
   const refDate = new Date(year, month, 1);
-
-  // 1. Income: paychecks
+  const payDatesNear = allPayDatesNearMonth(paycheckConfigs, year, month);
   const { payDates } = expectedPaychecksThisMonthDetail(paycheckConfigs, refDate);
+
   for (const p of payDates) {
     events.push({
       id: `paycheck-${p.name}-${toYMD(p.date)}`,
@@ -109,72 +150,142 @@ export function buildRecurringEvents(
     });
   }
 
-  // 2. Expenses: bills (bills_account + checking_account) — group by account+listType+name so duplicates show as one
-  const billsByCategory = new Map<string, BillOrSubWithMeta[]>();
-  for (const b of billsWithMeta) {
-    const account = b.account ?? "checking_account";
-    const listType = b.listType ?? "bills";
-    const key = `${account}|${listType}|${(b.name ?? "").toLowerCase()}`;
-    const list = billsByCategory.get(key) ?? [];
-    list.push(b);
-    billsByCategory.set(key, list);
-  }
-  for (const [, list] of billsByCategory) {
-    if (list.length === 0) continue;
-    const first = list[0]!;
-    const account = first.account ?? "checking_account";
-    const listType = first.listType ?? "bills";
-    const name = first.name;
-    const totalAmount = list.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
-    const dates = billDatesInMonth(first, year, month);
-    const billKey = `${account}|${listType}|${name.toLowerCase()}`;
-    const paid = paidByBillKey?.get(billKey);
-    for (const d of dates) {
-      events.push({
-        id: `bill-${account}-${listType}-${d}-${name.replace(/\s/g, "-")}`,
-        date: d,
-        type: "expense",
-        account,
-        name,
-        amount: totalAmount,
-        recurrence: recurrenceLabel(first.frequency),
-        isPaid: paid !== undefined && paid > 0,
-      });
+  for (const [account, listType] of BILL_SECTIONS) {
+    const filtered = filterBillsWithMeta(billsWithMeta, account, listType);
+    if (filtered.length === 0) continue;
+    const { items: groupedItems, membersByGroupKey } = groupBillsBySubsection(filtered);
+    for (const item of groupedItems) {
+      const groupKey = item.subsection ?? "";
+      const members = membersByGroupKey.get(groupKey) ?? [];
+      const dates = billDatesInMonth(item, year, month);
+      const isSynthetic = isSyntheticBillSubsectionKey(groupKey);
+      const candidates = isSynthetic ? [] : goalsForBillName(goals, item.name);
+      const requireGoalIds = candidates.length > 0;
+      const membersForCredit = members.map((m) => ({
+        name: m.name,
+        amount: m.amount,
+      }));
+
+      for (const d of dates) {
+        const cycleKey = recurringCycleKeyForExpense(
+          d,
+          item.frequency,
+          year,
+          month,
+          paycheckConfigs,
+          payDatesNear
+        );
+        const isPaid = isManualRecurringPaidForKey(members, cycleKey, requireGoalIds);
+        const ids = members.map((m) => m.id);
+        const storedGid = isPaid
+          ? (members[0]?.recurringPaidGoalId ?? "").trim() || null
+          : null;
+        const storedStmt = isPaid
+          ? (members[0]?.recurringPaidStatementId ?? "").trim() || null
+          : null;
+        const goalForApplied = storedGid ? goals.find((g) => g.id === storedGid) : undefined;
+        const appliedCreditAmount =
+          isPaid && goalForApplied
+            ? creditAmountForMarkPaid(membersForCredit, goalForApplied, item.amount)
+            : 0;
+        events.push({
+          id: `bill-${account}-${listType}-${d}-${item.name.replace(/\s/g, "-")}`,
+          date: d,
+          type: "expense",
+          account,
+          name: item.name,
+          amount: item.amount,
+          recurrence: recurrenceLabel(item.frequency),
+          isPaid,
+          manualPaid: {
+            cycleKey,
+            collection: "bills",
+            ids,
+            goalCandidates: candidates.map((c) => ({ id: c.id, name: c.name })),
+            membersForCredit,
+            lineAmount: item.amount,
+            storedGoalId: storedGid,
+            storedStatementId: storedStmt,
+            appliedCreditAmount,
+          },
+        });
+      }
     }
   }
 
-  // 3. Expenses: Spanish Fork bills
   for (const b of spanishForkBills) {
-    const dates = billDatesInMonth(b as unknown as BillOrSub, year, month);
+    const asRow: BillOrSub = {
+      id: b.id,
+      name: b.name,
+      frequency: (b.frequency as BillOrSub["frequency"]) || "monthly",
+      nextDue: b.nextDue ?? "",
+      inThisPaycheck: b.inThisPaycheck,
+      amount: b.amount,
+      recurringPaidCycle: b.recurringPaidCycle ?? null,
+      recurringPaidGoalId: b.recurringPaidGoalId ?? null,
+      recurringPaidStatementId: b.recurringPaidStatementId ?? null,
+    };
+    const sfDisplayName = spanishForkMortgageDisplayName(b.name);
+    const dates = billDatesInMonth(asRow, year, month);
+    const memberMeta = [
+      {
+        recurringPaidCycle: b.recurringPaidCycle,
+        recurringPaidGoalId: b.recurringPaidGoalId,
+      },
+    ];
+    const sfCreditMembers = [{ name: b.name, amount: b.amount }];
+    const sfCandidates = goalsForBillName(goals, b.name);
+    const sfRequireGoalIds = sfCandidates.length > 0;
     for (const d of dates) {
-      const billKey = `spanish_fork|bills|${b.name.toLowerCase()}`;
-      const paid = paidByBillKey?.get(billKey);
+      const cycleKey = recurringCycleKeyForExpense(
+        d,
+        asRow.frequency,
+        year,
+        month,
+        paycheckConfigs,
+        payDatesNear
+      );
+      const isPaid = isManualRecurringPaidForKey(memberMeta, cycleKey, sfRequireGoalIds);
+      const storedGid = isPaid ? (b.recurringPaidGoalId ?? "").trim() || null : null;
+      const storedStmt = isPaid ? (b.recurringPaidStatementId ?? "").trim() || null : null;
+      const sfGoalForApplied = storedGid ? goals.find((g) => g.id === storedGid) : undefined;
+      const sfAppliedCredit =
+        isPaid && sfGoalForApplied
+          ? creditAmountForMarkPaid(sfCreditMembers, sfGoalForApplied, b.amount)
+          : 0;
       events.push({
         id: `sf-${b.id}-${d}`,
         date: d,
         type: "expense",
         account: "spanish_fork",
-        name: b.name,
+        name: sfDisplayName,
         amount: b.amount,
         recurrence: recurrenceLabel(b.frequency),
-        isPaid: paid !== undefined && paid > 0,
+        isPaid,
+        manualPaid: {
+          cycleKey,
+          collection: "spanish_fork_bills",
+          ids: [b.id],
+          goalCandidates: sfCandidates.map((c) => ({ id: c.id, name: c.name })),
+          membersForCredit: sfCreditMembers,
+          lineAmount: b.amount,
+          storedGoalId: storedGid,
+          storedStatementId: storedStmt,
+          appliedCreditAmount: sfAppliedCredit,
+        },
       });
     }
   }
 
-  // 4. Transfers: auto transfers (account = destination; fromAccount = source when dest is bills/SF)
   for (const t of autoTransfers) {
     if (!t.date) continue;
     const destAccount = transferDestinationAccount(t);
     const fromAcc = transferFromAccount(destAccount);
     const freq = (t.frequency ?? "monthly").toLowerCase();
-    // Get next occurrence on or after start of month
     const nextDate = getNextAutoTransferDate(t.date, t.frequency, refDate);
     if (Number.isNaN(nextDate.getTime())) continue;
     const last = new Date(year, month + 1, 0);
-    // Walk through the month
     const d = new Date(nextDate.getTime());
-    // Walk backward to start of month if needed
     if (freq.includes("2") && (freq.includes("week") || freq.includes("wk"))) {
       while (d > last) d.setDate(d.getDate() - 14);
       const first = new Date(year, month, 1);
@@ -193,7 +304,6 @@ export function buildRecurringEvents(
         d.setDate(d.getDate() + 14);
       }
     } else {
-      // Monthly/yearly: single occurrence
       if (d.getFullYear() === year && d.getMonth() === month) {
         events.push({
           id: `at-${t.id}-${toYMD(d)}`,

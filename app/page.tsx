@@ -8,8 +8,8 @@ import { HeaderAuth } from "@/components/HeaderAuth";
 import { AuthenticatedContent } from "@/components/AuthenticatedContent";
 import { DraggableSectionCards } from "@/components/DraggableSectionCards";
 import { RecurringTab } from "@/components/RecurringTab";
-import { AccountLevelsTab } from "@/components/AccountLevelsTab";
 import { TabLayout } from "@/components/TabLayout";
+import { PaycheckManagement } from "@/components/PaycheckManagement";
 import {
   initialSummary,
   billsAccountBills,
@@ -26,7 +26,6 @@ import {
   getBillsWithMeta,
   filterBillsWithMeta,
   groupBillsBySubsection,
-  normalizeKeyForGrouping,
   getAutoTransfers,
   getSpanishForkBills,
   getSummary,
@@ -38,6 +37,7 @@ import type { BillListAccount, BillListType, Section, Summary, SpanishForkBill, 
 import type { BillOrSubWithMeta } from "@/lib/pocketbase";
 import { computeActualsForMonthWithBreakdown, computeSpentForBillKeysInDateRange, VARIABLE_EXPENSES_BILL_KEY, matchRule, computeLastMonthActuals, getIncomeThisMonthFromTags, getVariableIncomeThisMonth } from "@/lib/statementTagging";
 import { getPaycheckDepositsThisMonth } from "@/lib/statementsAnalysis";
+import { paidAndBreakdownForBillInSection, spanishForkPaidMapKey } from "@/lib/mortgageBillNames";
 import {
   predictedNeedByAccountFromPb,
   predictedNeedByAccountFromLists,
@@ -125,6 +125,10 @@ export default async function Home() {
     return _rawBiweeklyEnd;
   })();
 
+  const displayDetail = getDisplayMonthDetail(paycheckConfigs, today);
+  const { displayMonth, displayMonthName, displayNextMonth, nextMonthName, payDates, paychecksThisMonth, paychecksDisplayNextMonth } =
+    displayDetail;
+
   const [
     sections,
     billsWithMeta,
@@ -170,14 +174,14 @@ export default async function Home() {
   const resolvedCheckingAccountBills = resolveStaticBillDates(checkingAccountBills, biweeklyEnd);
   const resolvedCheckingAccountSubs = resolveStaticBillDates(checkingAccountSubs, biweeklyEnd);
   const resolvedSpanishForkBills = resolveStaticBillDates(spanishForkBills, biweeklyEnd);
-  // This month: tagged statements count toward each subsection's "paid this month" (with breakdown for drill-down).
+  // Tagged statements for the budgeting display month (syncs with income + bill paid/cycle UI).
   const { rows: thisMonthActuals, breakdown: paidBreakdownByBill } =
     hasPb && statements.length > 0 && tagRules.length > 0
       ? computeActualsForMonthWithBreakdown(
           statements,
           tagRules,
-          today.getFullYear(),
-          today.getMonth()
+          displayMonth.getFullYear(),
+          displayMonth.getMonth()
         )
       : { rows: [] as import("@/lib/statementTagging").ActualRow[], breakdown: new Map<string, import("@/lib/statementTagging").ActualBreakdownItem[]>() };
   const paidThisMonthBySection = new Map<string, number>();
@@ -216,13 +220,17 @@ export default async function Home() {
   }
 
   const baseGoals = hasPb && goalsPb.length > 0 ? goalsPb : staticGoals;
-  const goals = baseGoals.map((g) => ({
-    ...g,
-    // Prefer statement-derived total; fall back to stored PB value when no statements are tagged yet.
-    currentAmount: goalProgressById.has(g.id)
-      ? (goalProgressById.get(g.id) ?? 0)
-      : (g.currentAmount ?? 0),
-  }));
+  const goals = baseGoals.map((g) => {
+    const taggedTotal = goalProgressById.get(g.id) ?? 0;
+    const pbAmount = Number(g.currentAmount) || 0;
+    const hasTaggedStatements = (goalStatementsById.get(g.id)?.length ?? 0) > 0;
+    // Never add taggedTotal + pbAmount: statement-tags recalc already stores the sum of tagged
+    // rows in PocketBase currentAmount, so that sum was double-counting (e.g. $1,600 + $1,000 stale PB → $2,600).
+    // When this goal has tagged transactions, use max(truncated-statement-sum, PB) so the bar matches
+    // the expandable list when PB is stale low, but Recurring "Mark paid" (PB delta) still counts if PB is higher.
+    const currentAmount = hasTaggedStatements ? Math.max(taggedTotal, pbAmount) : pbAmount;
+    return { ...g, currentAmount };
+  });
 
   // Paycheck deposits this month (for "Paid this month" in paychecks section):
   // (1) from imported statements that look like paychecks, (2) from paychecks added via modal with paidThisMonthYearMonth set
@@ -274,8 +282,6 @@ export default async function Home() {
   const autoTransfersMonthly = autoTransfersMonthlyByAccount(hasPb ? autoTransfersPb : autoTransfers);
 
   const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const displayDetail = getDisplayMonthDetail(paycheckConfigs, today);
-  const { displayMonth, displayMonthName, displayNextMonth, nextMonthName, payDates, paychecksThisMonth, paychecksDisplayNextMonth } = displayDetail;
   const forMonthName = displayMonthName;
 
   const hasStatements = hasPb && statements.length > 0;
@@ -553,6 +559,7 @@ export default async function Home() {
           paycheckConfigs={paycheckConfigs}
           moneyStatus={moneyStatusWithExtras}
           paycheckEndDate={biweeklyEnd ?? null}
+          billCycleCalendarRef={displayMonth}
           spanishForkGrossNeed={predictedNeedRaw.spanishFork}
           tenantRentMonthly={summary.spanishForkTenantRentMonthly ?? null}
           incomeThisMonthToDate={incomeThisMonthToDate}
@@ -586,6 +593,7 @@ function MainContent({
   paycheckConfigs,
   moneyStatus,
   paycheckEndDate,
+  billCycleCalendarRef,
   spanishForkGrossNeed,
   tenantRentMonthly,
   incomeThisMonthToDate,
@@ -614,6 +622,8 @@ function MainContent({
   paycheckConfigs: Awaited<ReturnType<typeof getPaychecks>>;
   moneyStatus: MoneyStatusWithExtras;
   paycheckEndDate: Date | null;
+  /** First day of month for bill paid/cycle + statement actuals (matches `displayMonth`). */
+  billCycleCalendarRef: Date;
   spanishForkGrossNeed: number;
   tenantRentMonthly: number | null;
   incomeThisMonthToDate?: number;
@@ -645,22 +655,38 @@ function MainContent({
       <div className="relative z-10 pl-4 pr-safe pt-4 pb-4 space-y-6 max-w-2xl mx-auto">
         <GoalsProvider initialGoals={goals} goalStatementsById={goalStatementsById}>
           <TabLayout
-            recurringContent={
+            checkinContent={
               <RecurringTab
                 paycheckConfigs={paycheckConfigs}
                 billsWithMeta={billsWithMeta}
                 spanishForkBills={hasPb ? spanishForkPb : spanishForkBills}
                 autoTransfers={hasPb ? autoTransfersPb : autoTransfers}
-                paidThisMonthByBill={paidThisMonthByBill}
-                paidThisMonthByAccount={moneyStatus.paidThisMonth}
-                incomeThisMonth={incomeThisMonthToDate ?? 0}
+                goals={goals}
                 today={today}
-                requiredThisPaycheckByAccount={moneyStatus.requiredThisPaycheckByAccount}
+                initialAccountBalances={{
+                  checking: _summary?.checkingBalance ?? null,
+                  bills: _summary?.billsBalance ?? null,
+                  spanishFork: _summary?.spanishForkBalance ?? null,
+                }}
+                recurringProjection={{
+                  requiredThisPaycheckByAccount: moneyStatus.requiredThisPaycheckByAccount ?? {
+                    checkingAccount: 0,
+                    billsAccount: 0,
+                    spanishFork: 0,
+                  },
+                  nextBillsInflowAmount: moneyStatus.nextBillsInflow?.amount ?? 0,
+                  nextSpanishForkInflowAmount: moneyStatus.nextSpanishForkInflow?.amount ?? 0,
+                  transfersOutOfCheckingTotal: (moneyStatus.upcomingTransfersOutOfChecking ?? []).reduce(
+                    (s, t) => s + t.amount,
+                    0
+                  ),
+                }}
               />
             }
             goalsContent={<GoalsSection />}
             billsContent={
               <div className="space-y-6">
+                <PaycheckManagement paycheckConfigs={paycheckConfigs} />
         {hasPb ? (
           <DraggableSectionCards sections={sectionsToRender}>
             {sectionsToRender.map((section) => {
@@ -670,37 +696,21 @@ function MainContent({
                   section.account as BillListAccount,
                   section.listType as BillListType
                 );
-                const { items, groupKeyToDisplayName } = groupBillsBySubsection(filtered);
+                const { items } = groupBillsBySubsection(filtered);
                 const sectionKey = `${section.account}|${section.listType}`;
-                const prefix = sectionKey + "|";
                 const monthlySpending = monthlySpendingBySection.get(sectionKey) ?? 0;
                 const paidByName: Record<string, number> = {};
                 const breakdownByName: Record<string, import("@/lib/statementTagging").ActualBreakdownItem[]> = {};
-                for (const b of filtered) {
-                  const base =
-                    b.subsection && b.subsection.trim()
-                      ? b.subsection.trim()
-                      : normalizeKeyForGrouping(b.name);
-                  const groupKey = `${base}|${b.name ?? b.id}`;
-                  const displayName = groupKeyToDisplayName.get(groupKey) ?? b.name;
-                  const nameLower = b.name.toLowerCase();
-                  // Primary lookup: exact section+name match
-                  const paidKey = `${sectionKey}|${nameLower}`;
-                  let v = paidThisMonthByBill.get(paidKey);
-                  let breakdownList = paidBreakdownByBill.get(paidKey);
-                  // Fallback: scan all actuals for any entry whose name part matches (handles section mismatch from tagging)
-                  if (v === undefined) {
-                    for (const [k, amt] of paidThisMonthByBill) {
-                      const parts = k.split("|");
-                      if (parts.length >= 3 && parts.slice(2).join("|") === nameLower) {
-                        v = (v ?? 0) + amt;
-                        const bd = paidBreakdownByBill.get(k);
-                        if (bd?.length) breakdownList = [...(breakdownList ?? []), ...bd];
-                      }
-                    }
-                  }
-                  if (v !== undefined)
-                    paidByName[displayName] = (paidByName[displayName] ?? 0) + v;
+                for (const item of items) {
+                  const displayName = item.name;
+                  const nameLower = displayName.toLowerCase();
+                  const { paid: v, breakdown: breakdownList } = paidAndBreakdownForBillInSection(
+                    sectionKey,
+                    nameLower,
+                    paidThisMonthByBill,
+                    paidBreakdownByBill
+                  );
+                  if (v !== undefined) paidByName[displayName] = (paidByName[displayName] ?? 0) + v;
                   if (breakdownList?.length) {
                     const existing = breakdownByName[displayName] ?? [];
                     breakdownByName[displayName] = [...existing, ...breakdownList];
@@ -720,6 +730,7 @@ function MainContent({
                     breakdownByName={breakdownByName}
                     canDelete
                     paycheckEndDate={paycheckEndDate}
+                    billCycleCalendarRef={billCycleCalendarRef}
                     sectionAccount={section.account}
                     sectionListType={section.listType}
                   />
@@ -730,14 +741,17 @@ function MainContent({
                 const sfBreakdownByName: Record<string, import("@/lib/statementTagging").ActualBreakdownItem[]> = {};
                 for (const [k, v] of paidThisMonthByBill) {
                   if (k.startsWith("spanish_fork|bills|")) {
-                    const name = k.slice("spanish_fork|bills|".length);
-                    sfPaidByName[name] = v;
+                    const raw = k.slice("spanish_fork|bills|".length);
+                    const labelKey = spanishForkPaidMapKey(raw);
+                    sfPaidByName[labelKey] = (sfPaidByName[labelKey] ?? 0) + v;
                   }
                 }
                 for (const [k, itemsList] of paidBreakdownByBill) {
                   if (k.startsWith("spanish_fork|bills|")) {
-                    const name = k.slice("spanish_fork|bills|".length);
-                    sfBreakdownByName[name] = itemsList;
+                    const raw = k.slice("spanish_fork|bills|".length);
+                    const labelKey = spanishForkPaidMapKey(raw);
+                    const existing = sfBreakdownByName[labelKey] ?? [];
+                    sfBreakdownByName[labelKey] = [...existing, ...itemsList];
                   }
                 }
                 return (
@@ -754,6 +768,8 @@ function MainContent({
                     tenantRentMonthly={tenantRentMonthly}
                     spanishForkGrossNeed={spanishForkGrossNeed}
                     canEditTenantRent
+                    billCycleCalendarRef={billCycleCalendarRef}
+                    paycheckEndDate={paycheckEndDate}
                   />
                 );
               }
@@ -776,6 +792,8 @@ function MainContent({
               title="Bills (Bills Account)"
               subtitle="Oklahoma bills"
               items={billsAccountBills}
+              paycheckEndDate={paycheckEndDate}
+              billCycleCalendarRef={billCycleCalendarRef}
               monthlySpending={monthlySpendingBySection.get("bills_account|bills") ?? 0}
               budgetedTotal={billsAccountBills.reduce((s, i) => s + (i.amount ?? 0), 0)}
               requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.billsAccount}
@@ -794,6 +812,8 @@ function MainContent({
             <BillsList
               title="Subscriptions (Bills Account)"
               items={billsAccountSubs}
+              paycheckEndDate={paycheckEndDate}
+              billCycleCalendarRef={billCycleCalendarRef}
               monthlySpending={monthlySpendingBySection.get("bills_account|subscriptions") ?? 0}
               budgetedTotal={billsAccountSubs.reduce((s, i) => s + (i.amount ?? 0), 0)}
               requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.billsAccount}
@@ -813,6 +833,8 @@ function MainContent({
               title="Bills (Checking Account)"
               subtitle="Checking bills"
               items={checkingAccountBills}
+              paycheckEndDate={paycheckEndDate}
+              billCycleCalendarRef={billCycleCalendarRef}
               monthlySpending={monthlySpendingBySection.get("checking_account|bills") ?? 0}
               budgetedTotal={checkingAccountBills.reduce((s, i) => s + (i.amount ?? 0), 0)}
               requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.checkingAccount}
@@ -831,6 +853,8 @@ function MainContent({
             <BillsList
               title="Subscriptions (Checking Account)"
               items={checkingAccountSubs}
+              paycheckEndDate={paycheckEndDate}
+              billCycleCalendarRef={billCycleCalendarRef}
               monthlySpending={monthlySpendingBySection.get("checking_account|subscriptions") ?? 0}
               budgetedTotal={checkingAccountSubs.reduce((s, i) => s + (i.amount ?? 0), 0)}
               requiredThisPaycheck={moneyStatus.requiredThisPaycheckByAccount?.checkingAccount}
@@ -848,6 +872,8 @@ function MainContent({
             />
             <SpanishForkSection
               bills={spanishForkBills}
+              billCycleCalendarRef={billCycleCalendarRef}
+              paycheckEndDate={paycheckEndDate}
               paidThisMonth={monthlySpendingBySection.get("spanish_fork|bills") ?? 0}
               paidByName={Object.fromEntries(
                 [...paidThisMonthByBill.entries()]
@@ -868,7 +894,6 @@ function MainContent({
         )}
               </div>
             }
-            accountsContent={<AccountLevelsTab moneyStatus={moneyStatus} />}
           />
         </GoalsProvider>
       </div>

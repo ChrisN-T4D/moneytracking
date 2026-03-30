@@ -16,7 +16,7 @@ export const initialSummary: Summary = {
 // Bills Schedule from PDF: Bills (Bills Account) — charge date and frequency
 export const billsAccountBills: BillOrSub[] = [
   { id: "1", name: "Tithing (Bills Acct)", frequency: "monthly", nextDue: "2026-03-13", inThisPaycheck: true, amount: 632.42, autoTransferNote: "Covered by C monthly income transfer" },
-  { id: "2", name: "Mortgage (Bills Acct)", frequency: "monthly", nextDue: "2026-03-13", inThisPaycheck: true, amount: 1886.96, autoTransferNote: "Covered by C monthly income transfer" },
+  { id: "2", name: "Oklahoma Mortgage", frequency: "monthly", nextDue: "2026-03-13", inThisPaycheck: true, amount: 1886.96, autoTransferNote: "Covered by C monthly income transfer" },
   { id: "3", name: "Oklahoma Natural Gas", frequency: "monthly", nextDue: "2026-04-03", inThisPaycheck: false, amount: 140, autoTransferNote: "Covered by C monthly income transfer" },
   { id: "4", name: "State Farm Auto Insurance", frequency: "monthly", nextDue: "2026-04-12", inThisPaycheck: false, amount: 241, autoTransferNote: "Covered by C monthly income transfer" },
   { id: "5", name: "BluePeak (Internet)", frequency: "monthly", nextDue: "2026-03-26", inThisPaycheck: true, amount: 65, autoTransferNote: "Covered by C monthly income transfer" },
@@ -71,7 +71,7 @@ export const autoTransfers: AutoTransfer[] = [
 
 // Spanish Fork bills from PDF — next due and frequency (tenant paid amounts in UI)
 export const spanishForkBills: SpanishForkBill[] = [
-  { id: "sf1", name: "Mortgage", frequency: "monthly", nextDue: "2026-04-06", inThisPaycheck: false, amount: 2024, tenantPaid: true },
+  { id: "sf1", name: "Spanish Fork Mortgage", frequency: "monthly", nextDue: "2026-04-06", inThisPaycheck: false, amount: 2024, tenantPaid: true },
   { id: "sf2", name: "Spanish Fork City Utilities (Varies) Due 25th", frequency: "monthly", nextDue: "2026-03-25", inThisPaycheck: true, amount: 150, tenantPaid: true },
   { id: "sf3", name: "State Farm Home Insurance (Bills Acct) Paid Via Escrow", frequency: "monthly", nextDue: "2026-03-25", inThisPaycheck: true, amount: 0, tenantPaid: false },
   { id: "sf4", name: "HOA Charge", frequency: "monthly", nextDue: "2026-04-11", inThisPaycheck: false, amount: 220, tenantPaid: true },

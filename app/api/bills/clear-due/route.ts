@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPbBase } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
+import { escapePbFilterString } from "@/lib/mortgageBillNames";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +40,8 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: false, message: "Admin auth required to update due dates." }, { status: 401 });
   }
 
-  // Fetch all bills matching this name
-  const filter = encodeURIComponent(`name="${name}"`);
+  // Fetch all bills matching this name (escaped — avoids broken filters / injection on odd names)
+  const filter = encodeURIComponent(`name="${escapePbFilterString(name)}"`);
   const listRes = await fetch(
     `${resolvedBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
     { cache: "no-store", headers: { Authorization: `Bearer ${token}` } }

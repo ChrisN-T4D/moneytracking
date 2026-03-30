@@ -22,36 +22,22 @@ function getBaseUrl(): string {
 const baseUrlForAuth = () =>
   (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim();
 
-/** Normalize a raw statement item so date/description are always strings (PocketBase may return null). */
-function normalizeStatementItem(item: {
-  id: string;
-  date?: string | null;
-  description?: string | null;
-  amount?: number;
-  balance?: number | null;
-  category?: string | null;
-  account?: string | null;
-  sourceFile?: string | null;
-}): StatementRecord {
-  const raw = item as Record<string, unknown>;
-  const dateRaw = raw.date ?? raw.Date ?? "";
-  const descRaw = raw.description ?? raw.desc ?? raw.Description ?? "";
+function normalizeStatementItem(item: Record<string, unknown>): StatementRecord {
   return {
-    id: String(item.id),
-    date: typeof dateRaw === "string" ? dateRaw : String(dateRaw ?? ""),
-    description: typeof descRaw === "string" ? descRaw : String(descRaw ?? ""),
+    id: String(item.id ?? ""),
+    date: String(item.date ?? ""),
+    description: String(item.description ?? ""),
     amount: Number(item.amount) || 0,
     balance: item.balance != null ? Number(item.balance) : null,
-    category: item.category ?? null,
-    account: item.account ?? null,
-    sourceFile: item.sourceFile ?? null,
+    category: item.category != null ? String(item.category) : null,
+    account: item.account != null ? String(item.account) : null,
+    sourceFile: item.sourceFile != null ? String(item.sourceFile) : null,
   };
 }
 
 /** Fetch statements; if 0 and admin env set, retry with admin auth (for restricted List rule). */
 async function getStatementsForFill(): Promise<StatementRecord[]> {
   let statements = await getStatements({ perPage: 1000, sort: "-date" });
-  statements = statements.map(normalizeStatementItem);
   if (statements.length > 0) return statements;
 
   const url = baseUrlForAuth();
@@ -68,21 +54,7 @@ async function getStatementsForFill(): Promise<StatementRecord[]> {
     );
     if (!res.ok) return statements;
     const data = (await res.json()) as { items?: Array<Record<string, unknown>> };
-    statements = (data.items ?? []).map((item) => {
-      const dateRaw = item.date ?? item.Date;
-      const descRaw = item.description ?? item.desc ?? item.Description;
-      const amountRaw = item.amount ?? item.Amount;
-      return normalizeStatementItem({
-        id: String(item.id ?? ""),
-        date: dateRaw != null ? String(dateRaw) : undefined,
-        description: descRaw != null ? String(descRaw) : undefined,
-        amount: amountRaw != null ? Number(amountRaw) : undefined,
-        balance: item.balance != null ? Number(item.balance) : null,
-        category: item.category != null ? String(item.category) : null,
-        account: item.account != null ? String(item.account) : null,
-        sourceFile: item.sourceFile != null ? String(item.sourceFile) : null,
-      });
-    });
+    statements = (data.items ?? []).map((item) => normalizeStatementItem(item));
   } catch {
     // keep statements as []
   }

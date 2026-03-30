@@ -16,6 +16,7 @@ import type {
 import type { Frequency } from "./types";
 import { getNextDueAndPaycheck, getTodayUTC, parseFlexibleDate, formatDateToYYYYMMDD } from "./paycheckDates";
 import { getAdminToken } from "./pocketbase-setup";
+import { isOklahomaMortgageBillName, OKLAHOMA_MORTGAGE_LABEL } from "./mortgageBillNames";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
 const POCKETBASE_API_URL = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim();
@@ -41,43 +42,22 @@ interface PbListResponse<T> {
   perPage: number;
 }
 
-// --- Paychecks (existing) ---
+// --- Paychecks ---
 
-/** PocketBase returns snake_case in API; we support both for paychecks. */
 type PbPaycheckItem = {
   id: string;
   name?: string;
   frequency?: string;
-  anchorDate?: string;
+  anchordate?: string;
   dayOfMonth?: number;
   amount?: number;
   paidThisMonthYearMonth?: string | null;
   amountPaidThisMonth?: number | null;
-  paid_this_month_year_month?: string | null;
-  amount_paid_this_month?: number | null;
   lastEditedByUserId?: string | null;
   lastEditedBy?: string | null;
   lastEditedAt?: string | null;
-  last_edited_by_user_id?: string | null;
-  last_edited_by?: string | null;
-  last_edited_at?: string | null;
+  fundingMonthPreference?: string | null;
 };
-
-export interface PaychecksResponse {
-  items: PbPaycheckItem[];
-  totalItems: number;
-  page: number;
-  perPage: number;
-}
-
-/** Find value in object by key normalized to lowercase no-underscores (e.g. amount_paid_this_month -> amountpaidthismonth). */
-function getByNormalizedKey(obj: Record<string, unknown>, normalized: string): unknown {
-  const want = normalized.toLowerCase().replace(/_/g, "");
-  for (const key of Object.keys(obj)) {
-    if (key.toLowerCase().replace(/_/g, "") === want) return obj[key];
-  }
-  return undefined;
-}
 
 /** Fetch paychecks from PocketBase. Uses admin auth when configured so List rules that require superusers succeed. Paychecks are shared; who edited is stored on each record. */
 export async function getPaychecks(): Promise<PaycheckConfig[]> {
@@ -99,46 +79,26 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
   try {
     const res = await fetch(url, { cache: "no-store", ...(Object.keys(headers).length > 0 ? { headers } : {}) });
     if (!res.ok) return [];
-    const data = (await res.json()) as PaychecksResponse;
+    const data = (await res.json()) as PbListResponse<PbPaycheckItem>;
     return (data.items ?? []).map((item) => {
-      const freq = item.frequency as string;
+      const freq = item.frequency ?? "";
       const frequency: PaycheckConfig["frequency"] =
-        freq === "monthlyLastWorkingDay"
-          ? "monthlyLastWorkingDay"
-          : freq === "monthly"
-            ? "monthly"
-            : "biweekly";
-      const raw = item as Record<string, unknown>;
-      const paidThisMonthYearMonthRaw =
-        raw.paidThisMonthYearMonth ?? raw.paid_this_month_year_month ?? getByNormalizedKey(raw, "paidThisMonthYearMonth");
-      const paidThisMonthYearMonth =
-        paidThisMonthYearMonthRaw != null && String(paidThisMonthYearMonthRaw).trim() !== ""
-          ? String(paidThisMonthYearMonthRaw).trim()
-          : null;
-      const amountPaidThisMonthRaw =
-        raw.amountPaidThisMonth ?? raw.amount_paid_this_month ?? getByNormalizedKey(raw, "amountPaidThisMonth");
-      const amountPaidThisMonth =
-        amountPaidThisMonthRaw != null && amountPaidThisMonthRaw !== ""
-          ? Number(amountPaidThisMonthRaw)
-          : null;
-      const rawItem = item as Record<string, unknown>;
-      const lastEditedBy = (rawItem.lastEditedBy ?? rawItem.last_edited_by) as string | null | undefined;
-      const lastEditedAt = (rawItem.lastEditedAt ?? rawItem.last_edited_at) as string | null | undefined;
-      const lastEditedByUserId = (rawItem.lastEditedByUserId ?? rawItem.last_edited_by_user_id) as string | null | undefined;
-      const fundingMonthPreferenceRaw = (rawItem.fundingMonthPreference ?? rawItem.funding_month_preference ?? getByNormalizedKey(rawItem, "fundingMonthPreference")) as string | null | undefined;
-      const fundingMonthPreference = fundingMonthPreferenceRaw === "same_month" || fundingMonthPreferenceRaw === "next_month" || fundingMonthPreferenceRaw === "split" ? fundingMonthPreferenceRaw : null;
-      const anchorDateRaw = (rawItem.anchordate ?? rawItem.anchorDate ?? rawItem.anchor_date ?? getByNormalizedKey(rawItem, "anchorDate")) as string | null | undefined;
-      const anchorDateStr = anchorDateRaw != null && String(anchorDateRaw).trim() !== "" ? String(anchorDateRaw).trim() : null;
-      const anchorDate = anchorDateStr
-        ? (() => {
-            // PocketBase returns dates as "YYYY-MM-DD HH:mm:ss.SSSZ". Slice the date portion
-            // directly to avoid UTC→local timezone shift turning e.g. Feb 20 into Feb 19.
-            const dateOnly = anchorDateStr.substring(0, 10);
-            if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return dateOnly;
-            const parsed = parseFlexibleDate(anchorDateStr);
-            return !Number.isNaN(parsed.getTime()) ? formatDateToYYYYMMDD(parsed) : anchorDateStr;
-          })()
-        : null;
+        freq === "monthlyLastWorkingDay" ? "monthlyLastWorkingDay"
+        : freq === "monthly" ? "monthly"
+        : "biweekly";
+      const anchorRaw = (item.anchordate ?? "").trim();
+      let anchorDate: string | null = null;
+      if (anchorRaw) {
+        const dateOnly = anchorRaw.substring(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) anchorDate = dateOnly;
+        else {
+          const parsed = parseFlexibleDate(anchorRaw);
+          anchorDate = !Number.isNaN(parsed.getTime()) ? formatDateToYYYYMMDD(parsed) : anchorRaw;
+        }
+      }
+      const paidYm = item.paidThisMonthYearMonth?.trim() || null;
+      const amtPaid = item.amountPaidThisMonth != null ? Number(item.amountPaidThisMonth) : null;
+      const fmp = item.fundingMonthPreference;
       return {
         id: item.id,
         name: item.name ?? "",
@@ -146,12 +106,13 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
         anchorDate,
         dayOfMonth: item.dayOfMonth ?? null,
         amount: item.amount ?? null,
-        paidThisMonthYearMonth,
-        amountPaidThisMonth,
-        fundingMonthPreference: fundingMonthPreference ?? null,
-        lastEditedBy: lastEditedBy ?? null,
-        lastEditedAt: lastEditedAt ?? null,
-        lastEditedByUserId: lastEditedByUserId ?? null,
+        paidThisMonthYearMonth: paidYm,
+        amountPaidThisMonth: amtPaid,
+        fundingMonthPreference:
+          fmp === "same_month" || fmp === "next_month" || fmp === "split" ? fmp : null,
+        lastEditedBy: item.lastEditedBy ?? null,
+        lastEditedAt: item.lastEditedAt ?? null,
+        lastEditedByUserId: item.lastEditedByUserId ?? null,
       };
     });
   } catch {
@@ -210,6 +171,9 @@ interface PbBill {
   account?: string;
   listType?: string;
   subsection?: string | null;
+  recurringPaidCycle?: string | null;
+  recurringPaidGoalId?: string | null;
+  recurringPaidStatementId?: string | null;
 }
 
 function parseFrequency(s: string | undefined): Frequency {
@@ -220,7 +184,9 @@ function parseFrequency(s: string | undefined): Frequency {
 function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
   const ref = getTodayUTC();
   const rawNextDue = (item.nextDue ?? "").trim();
-  // When nextDue is explicitly blank (user cleared it), don't recalculate
+  const recurringPaid = (item.recurringPaidCycle ?? "").trim() || null;
+  const recurringGoal = (item.recurringPaidGoalId ?? "").trim() || null;
+  const recurringStmt = (item.recurringPaidStatementId ?? "").trim() || null;
   if (!rawNextDue) {
     return {
       id: item.id,
@@ -231,6 +197,9 @@ function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
       amount: Number(item.amount) || 0,
       autoTransferNote: item.autoTransferNote ?? undefined,
       subsection: item.subsection ?? null,
+      recurringPaidCycle: recurringPaid,
+      recurringPaidGoalId: recurringGoal,
+      recurringPaidStatementId: recurringStmt,
     };
   }
   const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
@@ -248,6 +217,9 @@ function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
     amount: Number(item.amount) || 0,
     autoTransferNote: item.autoTransferNote ?? undefined,
     subsection: item.subsection ?? null,
+    recurringPaidCycle: recurringPaid,
+    recurringPaidGoalId: recurringGoal,
+    recurringPaidStatementId: recurringStmt,
   };
 }
 
@@ -316,6 +288,27 @@ export function normalizeKeyForGrouping(name: string): string {
   return s.replace(/\s+/g, "").replace(/&/g, "");
 }
 
+/** Internal subsection value on grouped rows — must not be saved on new bills from "Add to group". */
+export const OKLAHOMA_MORTGAGE_MERGE_SUBSECTION_KEY = "__oklahoma_mortgage__|merged" as const;
+
+export function isSyntheticBillSubsectionKey(sub: string | undefined | null): boolean {
+  const s = (sub ?? "").trim();
+  return s === OKLAHOMA_MORTGAGE_MERGE_SUBSECTION_KEY || (s.startsWith("__") && s.endsWith("|merged"));
+}
+
+/** Stable group key — must match `groupBillsBySubsection` (used when aggregating paid/breakdown per row). */
+export function billSubsectionGroupKey(b: BillOrSubWithMeta): string {
+  if (b.subsection && b.subsection.trim()) {
+    const base = b.subsection.trim();
+    return `${base}|${b.name ?? b.id}`;
+  }
+  if (isOklahomaMortgageBillName(b.name ?? "")) {
+    return OKLAHOMA_MORTGAGE_MERGE_SUBSECTION_KEY;
+  }
+  const base = normalizeKeyForGrouping(b.name);
+  return `${base}|${b.name ?? b.id}`;
+}
+
 /**
  * Group bills by subsection (or by normalized name when subsection empty).
  * Returns grouped items and a map from group key to display name for aggregating paid/breakdown.
@@ -323,24 +316,28 @@ export function normalizeKeyForGrouping(name: string): string {
 export function groupBillsBySubsection(bills: BillOrSubWithMeta[]): {
   items: BillOrSub[];
   groupKeyToDisplayName: Map<string, string>;
+  membersByGroupKey: Map<string, BillOrSubWithMeta[]>;
 } {
   const byKey = new Map<string, BillOrSubWithMeta[]>();
   for (const b of bills) {
-    const base =
-      b.subsection && b.subsection.trim()
-        ? b.subsection.trim()
-        : normalizeKeyForGrouping(b.name);
-    const key = `${base}|${b.name ?? b.id}`;
+    const key = billSubsectionGroupKey(b);
     const list = byKey.get(key) ?? [];
     list.push(b);
     byKey.set(key, list);
+  }
+  const membersByGroupKey = new Map<string, BillOrSubWithMeta[]>();
+  for (const [key, list] of byKey) {
+    membersByGroupKey.set(key, list);
   }
   const groupKeyToDisplayName = new Map<string, string>();
   const result: BillOrSub[] = [];
   for (const [key, list] of byKey) {
     if (list.length === 0) continue;
     const first = list[0]!;
-    const displayName = first.name;
+    const displayName =
+      key === OKLAHOMA_MORTGAGE_MERGE_SUBSECTION_KEY || isOklahomaMortgageBillName(first.name ?? "")
+        ? OKLAHOMA_MORTGAGE_LABEL
+        : first.name;
     groupKeyToDisplayName.set(key, displayName);
     const amounts = list.map((b) => Number(b.amount) || 0);
     const totalAmount = amounts.reduce((a, b) => a + b, 0);
@@ -362,7 +359,7 @@ export function groupBillsBySubsection(bills: BillOrSubWithMeta[]): {
       subsection: key,
     });
   }
-  return { items: result, groupKeyToDisplayName };
+  return { items: result, groupKeyToDisplayName, membersByGroupKey };
 }
 
 /** True if a BillOrSub id represents a grouped row (multiple bills under one subsection). */
@@ -414,6 +411,9 @@ interface PbSpanishForkBill {
   inThisPaycheck?: boolean;
   amount?: number;
   tenantPaid?: boolean;
+  recurringPaidCycle?: string | null;
+  recurringPaidGoalId?: string | null;
+  recurringPaidStatementID?: string | null;
 }
 
 /** Fetch Spanish Fork bills from PocketBase. Returns [] if URL not set or request fails. */
@@ -455,6 +455,9 @@ export async function getSpanishForkBills(paycheckEndDate?: Date | null): Promis
         inThisPaycheck,
         amount: Number(item.amount) || 0,
         tenantPaid: Boolean(item.tenantPaid),
+        recurringPaidCycle: (item.recurringPaidCycle ?? "").trim() || null,
+        recurringPaidGoalId: (item.recurringPaidGoalId ?? "").trim() || null,
+        recurringPaidStatementId: (item.recurringPaidStatementID ?? "").trim() || null,
       };
     });
   } catch {
@@ -583,10 +586,9 @@ interface PbStatement {
   category?: string | null;
   account?: string | null;
   sourceFile?: string | null;
-  goalId?: string | null;
-  goal_id?: string | null;
+  goalid?: string | null;
   pairedStatementId?: string | null;
-  transferFromAccount?: string | null;
+  trasnferFromAccount?: string | null;
   transferToAccount?: string | null;
   targetType?: string | null;
   targetSection?: string | null;
@@ -596,34 +598,26 @@ interface PbStatement {
 function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
   return (items ?? []).map((item) => {
     const raw = item as unknown as Record<string, unknown>;
-    const goalIdRaw = raw.goalId ?? raw.goalid ?? raw.goal_id ?? null;
-    const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
-    const pairedRaw = raw.pairedStatementId ?? raw.paired_statement_id ?? raw.pairedstatementid ?? null;
-    const pairedStatementId = pairedRaw != null && String(pairedRaw).trim() !== "" ? String(pairedRaw).trim() : null;
-    const fromAcc = raw.transferFromAccount ?? raw.trasnferFromAccount ?? raw.transfer_from_account ?? null;
-    const toAcc = raw.transferToAccount ?? raw.transfer_to_account ?? null;
-    const tt = raw.targetType ?? raw.target_type ?? null;
-    const ts = raw.targetSection ?? raw.target_section ?? null;
-    const tn = raw.targetName ?? raw.target_name ?? null;
-    const dateRaw = raw.date ?? raw.Date ?? "";
-    const descRaw = raw.description ?? raw.desc ?? raw.Description ?? "";
-    const amountRaw = raw.amount ?? raw.Amount;
+    const str = (key: string) => {
+      const v = raw[key];
+      return v != null && String(v).trim() !== "" ? String(v).trim() : null;
+    };
     return {
       id: item.id,
-      date: typeof dateRaw === "string" ? dateRaw : String(dateRaw ?? ""),
-      description: typeof descRaw === "string" ? descRaw : String(descRaw ?? ""),
-      amount: Number(amountRaw) || 0,
+      date: String(raw.date ?? ""),
+      description: String(raw.description ?? ""),
+      amount: Number(raw.amount) || 0,
       balance: item.balance != null ? Number(item.balance) : null,
       category: item.category ?? null,
       account: item.account ?? null,
-      sourceFile: item.sourceFile ?? null,
-      goalId,
-      pairedStatementId,
-      transferFromAccount: fromAcc != null && String(fromAcc).trim() !== "" ? String(fromAcc).trim() : null,
-      transferToAccount: toAcc != null && String(toAcc).trim() !== "" ? String(toAcc).trim() : null,
-      targetType: tt != null && String(tt).trim() !== "" ? (String(tt).trim() as StatementRecord["targetType"]) : null,
-      targetSection: ts != null && String(ts).trim() !== "" ? (String(ts).trim() as StatementRecord["targetSection"]) : null,
-      targetName: tn != null && String(tn).trim() !== "" ? String(tn).trim() : null,
+      sourceFile: str("sourceFile"),
+      goalId: str("goalid"),
+      pairedStatementId: str("pairedStatementId"),
+      transferFromAccount: str("trasnferFromAccount"),
+      transferToAccount: str("transferToAccount"),
+      targetType: str("targetType") as StatementRecord["targetType"],
+      targetSection: str("targetSection") as StatementRecord["targetSection"],
+      targetName: str("targetName"),
     };
   });
 }

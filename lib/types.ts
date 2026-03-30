@@ -9,6 +9,12 @@ export interface BillOrSub {
   amount: number;
   autoTransferNote?: string;
   subsection?: string | null;
+  /** Manual Recurring-tab "paid this cycle" marker (PocketBase `recurringPaidCycle`). */
+  recurringPaidCycle?: string | null;
+  /** Goal id credited when marking paid (PocketBase `recurringPaidGoalId`); cleared with cycle. */
+  recurringPaidGoalId?: string | null;
+  /** PocketBase statement id created for Recurring mark paid (cleared with cycle). */
+  recurringPaidStatementId?: string | null;
 }
 
 export interface AutoTransfer {
@@ -30,6 +36,10 @@ export interface SpanishForkBill {
   inThisPaycheck: boolean;
   amount: number;
   tenantPaid: boolean;
+  /** Manual Recurring-tab "paid this cycle" marker. */
+  recurringPaidCycle?: string | null;
+  recurringPaidGoalId?: string | null;
+  recurringPaidStatementId?: string | null;
 }
 
 export interface Summary {

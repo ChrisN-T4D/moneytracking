@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { formatCurrency, displayBillName } from "@/lib/format";
 import { formatDateForDue, formatDateNoYear } from "@/lib/paycheckDates";
 import type { BillOrSub, Frequency } from "@/lib/types";
-import { isGroupedBillId } from "@/lib/pocketbase";
+import { isGroupedBillId, isSyntheticBillSubsectionKey } from "@/lib/pocketbase";
 import type { ActualBreakdownItem } from "@/lib/statementTagging";
 import { getCardClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
@@ -32,6 +32,8 @@ interface BillsListProps {
   canDelete?: boolean;
   /** Next biweekly paycheck date — used when changing a bill to 2-week frequency. */
   paycheckEndDate?: Date | null;
+  /** Calendar month for "paid this cycle" / monthly paid state (should match statement actuals month, e.g. display month). */
+  billCycleCalendarRef?: Date | null;
   /** Section account (e.g. checking_account) — required for grouped-row update/delete by name. */
   sectionAccount?: string;
   /** Section list type (e.g. bills) — required for grouped-row update/delete by name. */
@@ -45,9 +47,18 @@ const addCycle = addCycleUtil;
 function paidCycleStatus(
   item: BillOrSub,
   breakdown: ActualBreakdownItem[] | undefined,
-  paidAmt: number | undefined
+  paidAmt: number | undefined,
+  paycheckEndDate: Date | null | undefined,
+  billCycleCalendarRef: Date | null | undefined
 ): { isPaid: boolean; lastDate: Date; nextCycleDate: Date } | null {
-  return paidCycleStatusUtil(item.frequency, breakdown, paidAmt);
+  return paidCycleStatusUtil(item.frequency, breakdown, paidAmt, {
+    paycheckEndDate: paycheckEndDate ?? null,
+    calendarRef: billCycleCalendarRef ?? null,
+  });
+}
+
+function toYMDLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function frequencyBadge(f: BillOrSub["frequency"]) {
@@ -70,7 +81,17 @@ interface EditState {
   error: string | null;
 }
 
-export function BillsList({ title, subtitle, items: initialItems, monthlySpending, budgetedTotal, requiredThisPaycheck, currentAmountInAccount, paidByName = {}, breakdownByName = {}, canDelete = false, paycheckEndDate, sectionAccount, sectionListType }: BillsListProps) {
+interface NameEditState {
+  id: string;
+  /** Current input (may differ from stored until save). */
+  value: string;
+  /** PocketBase name when edit started — used for update-by-name and revert. */
+  originalName: string;
+  saving: boolean;
+  error: string | null;
+}
+
+export function BillsList({ title, subtitle, items: initialItems, monthlySpending, budgetedTotal, requiredThisPaycheck, currentAmountInAccount, paidByName = {}, breakdownByName = {}, canDelete = false, paycheckEndDate, billCycleCalendarRef, sectionAccount, sectionListType }: BillsListProps) {
   const { theme } = useTheme();
   const router = useRouter();
 
@@ -117,7 +138,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
   function effectiveNextDate(item: BillOrSub): Date | null {
     const bd = getBreakdownForItem(item.name);
     const pa = getPaidForItem(item.name);
-    const cycle = paidCycleStatus(item, bd, pa ?? undefined);
+    const cycle = paidCycleStatus(item, bd, pa ?? undefined, paycheckEndDate, billCycleCalendarRef);
     if (cycle?.isPaid) return cycle.nextCycleDate;
     if (!item.nextDue) return null;
     return new Date(item.nextDue);
@@ -132,7 +153,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
     function itemGroup(item: BillOrSub): number {
       const bd = getBreakdownForItem(item.name);
       const pa = getPaidForItem(item.name);
-      const cycle = paidCycleStatus(item, bd, pa ?? undefined);
+      const cycle = paidCycleStatus(item, bd, pa ?? undefined, paycheckEndDate, billCycleCalendarRef);
       const due = effectiveNextDate(item);
       // Only group 0 (top/red) for unpaid items that are overdue
       if (!cycle?.isPaid && due && due < now) return 0;
@@ -157,37 +178,142 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
 
   const [items, setItems] = useState<BillOrSub[]>(() => sortBills(initialItems));
   const [edit, setEdit] = useState<EditState | null>(null);
+  const [nameEdit, setNameEdit] = useState<NameEditState | null>(null);
   const [breakdownModal, setBreakdownModal] = useState<{ name: string; items: ActualBreakdownItem[] } | null>(null);
   const [dateEditModal, setDateEditModal] = useState<{ item: BillOrSub } | null>(null);
   const [dateEditValue, setDateEditValue] = useState("");
   const [dateEditSaving, setDateEditSaving] = useState(false);
+  const [dateEditError, setDateEditError] = useState<string | null>(null);
+  const [addBillOpen, setAddBillOpen] = useState(false);
+  const [addBillName, setAddBillName] = useState("");
+  const [addBillAmount, setAddBillAmount] = useState("");
+  const [addBillFreq, setAddBillFreq] = useState<Frequency>("monthly");
+  const [addBillNextDue, setAddBillNextDue] = useState("");
+  const [addBillSubsection, setAddBillSubsection] = useState("");
+  const [addBillSaving, setAddBillSaving] = useState(false);
+  const [addBillError, setAddBillError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  const subsectionOptions = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      const sub = it.subsection?.trim();
+      if (!sub || isSyntheticBillSubsectionKey(sub) || seen.has(sub)) continue;
+      seen.add(sub);
+      out.push({ value: sub, label: displayBillName(it.name) });
+    }
+    out.sort((a, b) => a.label.localeCompare(b.label));
+    return out;
+  }, [items]);
 
   // Re-sort whenever items or paid/breakdown data changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     setItems(sortBills(initialItems));
-  }, [initialItems, paidByName, breakdownByName]);
+  }, [initialItems, paidByName, breakdownByName, paycheckEndDate, billCycleCalendarRef]);
 
-  // Sync date picker value when date-edit modal opens
+  // Sync date picker to what the Bills row shows — effective next (including paid → next cycle)
   useEffect(() => {
-    if (dateEditModal) {
-      const d = dateEditModal.item.nextDue?.trim();
-      setDateEditValue(d ? d.slice(0, 10) : "");
+    if (!dateEditModal) return;
+    setDateEditError(null);
+    const item = dateEditModal.item;
+    const bd = getBreakdownForItem(item.name);
+    const pa = getPaidForItem(item.name);
+    const cycle = paidCycleStatus(item, bd, pa ?? undefined, paycheckEndDate, billCycleCalendarRef);
+    if (cycle?.isPaid) {
+      setDateEditValue(toYMDLocal(cycle.nextCycleDate));
+    } else if (item.nextDue?.trim()) {
+      setDateEditValue(item.nextDue.trim().slice(0, 10));
+    } else {
+      setDateEditValue("");
     }
-  }, [dateEditModal]);
+  }, [dateEditModal, paidByName, breakdownByName, paycheckEndDate, billCycleCalendarRef]);
+
+  function openAddBillModal() {
+    setAddBillError(null);
+    setAddBillName("");
+    setAddBillAmount("");
+    setAddBillFreq("monthly");
+    setAddBillNextDue("");
+    setAddBillSubsection("");
+    setAddBillOpen(true);
+  }
 
   const requiredAmount = budgetedTotal ?? items.reduce((sum, i) => sum + (i.amount ?? 0), 0);
   const showHeaderAmounts = requiredAmount > 0 || requiredThisPaycheck != null || currentAmountInAccount != null;
 
   const startEdit = useCallback((item: BillOrSub) => {
+    setNameEdit(null);
     setEdit({ id: item.id, value: String(item.amount ?? ""), saving: false, error: null });
     setTimeout(() => inputRef.current?.select(), 0);
   }, []);
 
   const cancelEdit = useCallback(() => setEdit(null), []);
+
+  const startNameEdit = useCallback((item: BillOrSub) => {
+    setEdit(null);
+    setNameEdit({
+      id: item.id,
+      value: item.name,
+      originalName: item.name,
+      saving: false,
+      error: null,
+    });
+    setTimeout(() => nameInputRef.current?.select(), 0);
+  }, []);
+
+  const cancelNameEdit = useCallback(() => setNameEdit(null), []);
+
+  const commitNameEdit = useCallback(async () => {
+    if (!nameEdit || nameEdit.saving) return;
+    const newName = nameEdit.value.trim();
+    if (!newName) {
+      setNameEdit((e) => (e ? { ...e, error: "Name cannot be empty" } : null));
+      return;
+    }
+    if (newName === nameEdit.originalName) {
+      setNameEdit(null);
+      return;
+    }
+    const { id, originalName: oldName } = nameEdit;
+    setNameEdit((e) => (e ? { ...e, saving: true, error: null } : null));
+    setItems((prev) => prev.map((b) => (b.id === id ? { ...b, name: newName } : b)));
+    try {
+      const isGrouped = isGroupedBillId(id);
+      const canPatch = !isGrouped || (sectionAccount && sectionListType);
+      if (!canPatch) {
+        setItems((prev) => prev.map((b) => (b.id === id ? { ...b, name: oldName } : b)));
+        setNameEdit((e) =>
+          e ? { ...e, saving: false, error: "Cannot rename this row (missing section context)." } : null
+        );
+        return;
+      }
+      const url =
+        isGrouped && sectionAccount && sectionListType
+          ? `/api/bills/update-by-name?name=${encodeURIComponent(oldName)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
+          : `/api/bills/${id}`;
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        setItems((prev) => prev.map((b) => (b.id === id ? { ...b, name: oldName } : b)));
+        setNameEdit((e) => (e ? { ...e, saving: false, error: data.message ?? "Save failed" } : null));
+        return;
+      }
+      setNameEdit(null);
+      router.refresh();
+    } catch {
+      setItems((prev) => prev.map((b) => (b.id === id ? { ...b, name: oldName } : b)));
+      setNameEdit((e) => (e ? { ...e, saving: false, error: "Save failed" } : null));
+    }
+  }, [nameEdit, sectionAccount, sectionListType, router]);
 
   const commitEdit = useCallback(async (item: BillOrSub) => {
     if (!edit || edit.saving) return;
@@ -252,10 +378,21 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
   return (
     <section className={getCardClasses(theme.bills)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">{title}</h2>
-          {subtitle && (
-            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div>
+            <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">{title}</h2>
+            {subtitle && (
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</p>
+            )}
+          </div>
+          {canDelete && sectionAccount && sectionListType && (
+            <button
+              type="button"
+              onClick={openAddBillModal}
+              className="shrink-0 rounded-lg border border-emerald-600/60 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900 hover:bg-emerald-100 dark:border-emerald-500/50 dark:bg-emerald-950/50 dark:text-emerald-100 dark:hover:bg-emerald-900/60"
+            >
+              + Add bill
+            </button>
           )}
         </div>
         {deleteError && (
@@ -308,31 +445,75 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
           </thead>
           <tbody>
             {items.map((item) => {
-              const isEditing = edit?.id === item.id;
+              const isEditingAmount = edit?.id === item.id;
+              const isEditingName = nameEdit?.id === item.id;
               const paidAmt = getPaidForItem(item.name);
               const breakdown = getBreakdownForItem(item.name);
               const displayName = displayBillName(item.name);
               const canShowBreakdown = breakdown && breakdown.length > 0;
+              const canRename =
+                canDelete && (!isGroupedBillId(item.id) || (sectionAccount && sectionListType));
               return (
                 <tr
                   key={item.id}
                   className="border-b border-neutral-100 dark:border-neutral-700/50 last:border-0"
                 >
                   <td className="sticky left-0 z-10 py-2.5 pr-2 text-neutral-800 dark:text-neutral-200 min-w-0 bg-white dark:bg-neutral-900 border-r border-neutral-100 dark:border-neutral-700/50" title={displayName}>
-                    <span className="block min-w-0 truncate">
-                      {canShowBreakdown ? (
-                        <button
-                          type="button"
-                          onClick={() => setBreakdownModal({ name: displayName, items: breakdown })}
-                          className="text-left font-medium hover:text-sky-600 dark:hover:text-sky-400 underline-offset-2 hover:underline truncate block min-w-0 w-full"
-                          title="View transactions for this subsection"
-                        >
-                          {displayName}
-                        </button>
-                      ) : (
-                        displayName
-                      )}
-                    </span>
+                    {isEditingName ? (
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <input
+                          ref={nameInputRef}
+                          type="text"
+                          value={nameEdit!.value}
+                          disabled={nameEdit!.saving}
+                          onChange={(e) =>
+                            setNameEdit((s) => (s ? { ...s, value: e.target.value, error: null } : null))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void commitNameEdit();
+                            }
+                            if (e.key === "Escape") cancelNameEdit();
+                          }}
+                          onBlur={() => void commitNameEdit()}
+                          className="w-full min-w-0 rounded border border-sky-400 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-sm font-medium text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-50"
+                          aria-label="Bill name"
+                        />
+                        {nameEdit!.error && <p className="text-[10px] text-red-500">{nameEdit!.error}</p>}
+                        {nameEdit!.saving && <p className="text-[10px] text-neutral-400">Saving…</p>}
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-1 min-w-0">
+                        <span className="min-w-0 flex-1 truncate">
+                          {canShowBreakdown ? (
+                            <button
+                              type="button"
+                              onClick={() => setBreakdownModal({ name: displayName, items: breakdown })}
+                              className="text-left font-medium hover:text-sky-600 dark:hover:text-sky-400 underline-offset-2 hover:underline truncate block min-w-0 w-full"
+                              title="View transactions for this subsection"
+                            >
+                              {displayName}
+                            </button>
+                          ) : (
+                            <span className="font-medium truncate block">{displayName}</span>
+                          )}
+                        </span>
+                        {canRename && (
+                          <button
+                            type="button"
+                            onClick={() => startNameEdit(item)}
+                            className="shrink-0 rounded p-0.5 text-neutral-400 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 mt-0.5"
+                            title="Rename bill"
+                            aria-label={`Rename ${displayName}`}
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                              <path d="M11.5 2.5a1.5 1.5 0 0 1 2 2L5 13l-3 1 1-3 8.5-8.5z" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="py-2.5 pr-2 text-neutral-600 dark:text-neutral-400 text-center shrink-0">
                     {canDelete && (!isGroupedBillId(item.id) || (sectionAccount && sectionListType)) ? (
@@ -372,19 +553,42 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   </td>
                   <td className="py-2.5 pr-2 whitespace-nowrap">
                     {(() => {
-                      const cycle = paidCycleStatus(item, breakdown, paidAmt);
+                      const cycle = paidCycleStatus(item, breakdown, paidAmt, paycheckEndDate, billCycleCalendarRef);
                       const today = new Date(); today.setHours(0,0,0,0);
 
                       if (cycle?.isPaid) {
-                        // Paid this cycle — next due (big) + last paid (small)
+                        const openDateEdit = () => setDateEditModal({ item });
                         return (
                           <span className="flex flex-col gap-0.5">
-                            <span className="text-amber-600 dark:text-amber-400 font-medium text-sm">
-                              {formatDateNoYear(cycle.nextCycleDate)}
-                            </span>
-                            <span className="text-emerald-600 dark:text-emerald-400 text-[10px]">
-                              ✓ paid {formatDateNoYear(cycle.lastDate)}
-                            </span>
+                            {canDelete ? (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Change next due date"
+                                  onClick={openDateEdit}
+                                  className="text-left text-amber-600 dark:text-amber-400 font-medium text-sm hover:underline underline-offset-2"
+                                >
+                                  {formatDateNoYear(cycle.nextCycleDate)}
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Change next due date"
+                                  onClick={openDateEdit}
+                                  className="text-left text-emerald-600 dark:text-emerald-400 text-[10px] hover:underline underline-offset-2"
+                                >
+                                  ✓ paid {formatDateNoYear(cycle.lastDate)}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-amber-600 dark:text-amber-400 font-medium text-sm">
+                                  {formatDateNoYear(cycle.nextCycleDate)}
+                                </span>
+                                <span className="text-emerald-600 dark:text-emerald-400 text-[10px]">
+                                  ✓ paid {formatDateNoYear(cycle.lastDate)}
+                                </span>
+                              </>
+                            )}
                           </span>
                         );
                       }
@@ -434,10 +638,15 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const paycheckEnd = paycheckEndDate ?? (() => { const d = new Date(now); d.setDate(d.getDate() + 14); return d; })();
 
                       // "Already paid this cycle" = payments in this 2-week window (or this month when frequency is monthly)
-                      const { thisCycle: paidThisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null, item.frequency);
+                      const { thisCycle: paidThisCycle } = paidThisAndLastCycle(
+                        breakdown,
+                        paycheckEndDate ?? null,
+                        item.frequency,
+                        billCycleCalendarRef ?? null
+                      );
                       const alreadyPaidThisCycle = paidThisCycle > 0;
 
-                      const cycle = paidCycleStatus(item, breakdown, paidAmt);
+                      const cycle = paidCycleStatus(item, breakdown, paidAmt, paycheckEndDate, billCycleCalendarRef);
                       let inPaycheck = false;
                       if (alreadyPaidThisCycle) {
                         inPaycheck = false;
@@ -462,7 +671,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   <td className="py-2.5 pr-2 text-right font-medium tabular-nums">
                     {isGroupedBillId(item.id) && !(sectionAccount && sectionListType) ? (
                       <span className="tabular-nums">{formatCurrency(item.amount)}</span>
-                    ) : isEditing ? (
+                    ) : isEditingAmount ? (
                       <div className="flex flex-col items-end gap-1">
                         <div className="flex items-center gap-1">
                           <span className="text-neutral-400 text-xs">$</span>
@@ -505,7 +714,12 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   </td>
                   <td className="py-2.5 text-right tabular-nums">
                     {(() => {
-                      const { thisCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null, item.frequency);
+                      const { thisCycle } = paidThisAndLastCycle(
+                        breakdown,
+                        paycheckEndDate ?? null,
+                        item.frequency,
+                        billCycleCalendarRef ?? null
+                      );
                       if (thisCycle <= 0) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
                       return canShowBreakdown ? (
                         <button
@@ -525,7 +739,12 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                   </td>
                   <td className="py-2.5 text-right tabular-nums">
                     {(() => {
-                      const { lastCycle } = paidThisAndLastCycle(breakdown, paycheckEndDate ?? null, item.frequency);
+                      const { lastCycle } = paidThisAndLastCycle(
+                        breakdown,
+                        paycheckEndDate ?? null,
+                        item.frequency,
+                        billCycleCalendarRef ?? null
+                      );
                       if (lastCycle <= 0) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
                       return canShowBreakdown ? (
                         <button
@@ -673,6 +892,11 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                 </button>
               </div>
               <div className="p-4 space-y-4">
+                {dateEditError && (
+                  <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+                    {dateEditError}
+                  </p>
+                )}
                 <div>
                   <label htmlFor="date-edit-input" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
                     Date
@@ -681,7 +905,10 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     id="date-edit-input"
                     type="date"
                     value={dateEditValue}
-                    onChange={(e) => setDateEditValue(e.target.value)}
+                    onChange={(e) => {
+                      setDateEditValue(e.target.value);
+                      if (dateEditError) setDateEditError(null);
+                    }}
                     disabled={dateEditSaving}
                     className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
                   />
@@ -693,9 +920,10 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const nextDue = dateEditValue.trim() ? dateEditValue.trim().slice(0, 10) : "";
                       if (!nextDue) return;
                       setDateEditSaving(true);
-                      const prev = dateEditModal.item.nextDue;
+                      setDateEditError(null);
+                      const item = dateEditModal.item;
+                      const prev = item.nextDue;
                       try {
-                        const item = dateEditModal.item;
                         const isGrouped = isGroupedBillId(item.id);
                         const endpoint = isGrouped && sectionAccount && sectionListType
                           ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
@@ -712,8 +940,13 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                           setDateEditModal(null);
                           router.refresh();
                         } else {
+                          const data = (await res.json().catch(() => ({}))) as { message?: string };
+                          setDateEditError(data.message ?? `Could not save date (${res.status}).`);
                           setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
                         }
+                      } catch {
+                        setDateEditError("Network error while saving.");
+                        setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
                       } finally {
                         setDateEditSaving(false);
                       }
@@ -727,6 +960,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     type="button"
                     onClick={async () => {
                       setDateEditSaving(true);
+                      setDateEditError(null);
                       const item = dateEditModal.item;
                       const prev = item.nextDue;
                       try {
@@ -747,8 +981,13 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                           setDateEditValue("");
                           router.refresh();
                         } else {
+                          const data = (await res.json().catch(() => ({}))) as { message?: string };
+                          setDateEditError(data.message ?? `Could not clear date (${res.status}).`);
                           setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
                         }
+                      } catch {
+                        setDateEditError("Network error while saving.");
+                        setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
                       } finally {
                         setDateEditSaving(false);
                       }
@@ -762,6 +1001,178 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     type="button"
                     onClick={() => !dateEditSaving && setDateEditModal(null)}
                     disabled={dateEditSaving}
+                    className="rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 px-3 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {addBillOpen &&
+        sectionAccount &&
+        sectionListType &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex min-h-[100dvh] items-center justify-center bg-neutral-950/70 p-4 backdrop-blur-sm"
+            onClick={() => !addBillSaving && setAddBillOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-bill-modal-title"
+          >
+            <div
+              className="bg-white dark:bg-neutral-900 rounded-2xl shadow-2xl max-w-md w-full border border-neutral-200 dark:border-neutral-700 overflow-hidden max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700">
+                <h3 id="add-bill-modal-title" className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                  Add bill · {title}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => !addBillSaving && setAddBillOpen(false)}
+                  className="rounded-lg p-1.5 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
+                  aria-label="Close"
+                  disabled={addBillSaving}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6L18 18M18 6L6 18" />
+                  </svg>
+                </button>
+              </div>
+              <div className="p-4 space-y-3">
+                {addBillError && (
+                  <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+                    {addBillError}
+                  </p>
+                )}
+                <div>
+                  <label htmlFor="add-bill-name" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    Name
+                  </label>
+                  <input
+                    id="add-bill-name"
+                    type="text"
+                    value={addBillName}
+                    onChange={(e) => setAddBillName(e.target.value)}
+                    disabled={addBillSaving}
+                    className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
+                    placeholder="e.g. Water"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-bill-amount" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    Amount
+                  </label>
+                  <input
+                    id="add-bill-amount"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={addBillAmount}
+                    onChange={(e) => setAddBillAmount(e.target.value)}
+                    disabled={addBillSaving}
+                    className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-bill-freq" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    Frequency
+                  </label>
+                  <select
+                    id="add-bill-freq"
+                    value={addBillFreq}
+                    onChange={(e) => setAddBillFreq(e.target.value as Frequency)}
+                    disabled={addBillSaving}
+                    className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
+                  >
+                    <option value="monthly">Monthly</option>
+                    <option value="2weeks">Every 2 weeks</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="add-bill-due" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    Next due (optional)
+                  </label>
+                  <input
+                    id="add-bill-due"
+                    type="date"
+                    value={addBillNextDue}
+                    onChange={(e) => setAddBillNextDue(e.target.value)}
+                    disabled={addBillSaving}
+                    className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-bill-sub" className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    Add to group (optional)
+                  </label>
+                  <select
+                    id="add-bill-sub"
+                    value={addBillSubsection}
+                    onChange={(e) => setAddBillSubsection(e.target.value)}
+                    disabled={addBillSaving}
+                    className="w-full rounded-lg border border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
+                  >
+                    <option value="">New bill (no group)</option>
+                    {subsectionOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        Same group as “{o.label}”
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={addBillSaving || !addBillName.trim()}
+                    onClick={async () => {
+                      const name = addBillName.trim();
+                      if (!name) return;
+                      setAddBillSaving(true);
+                      setAddBillError(null);
+                      try {
+                        const res = await fetch("/api/bills", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            name,
+                            amount: parseFloat(addBillAmount.replace(/[$,\s]/g, "")) || 0,
+                            frequency: addBillFreq,
+                            nextDue: addBillNextDue.trim() ? addBillNextDue.trim().slice(0, 10) : "",
+                            account: sectionAccount,
+                            listType: sectionListType,
+                            subsection: addBillSubsection.trim() || null,
+                          }),
+                        });
+                        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+                        if (!res.ok) {
+                          setAddBillError(data.message ?? `Save failed (${res.status})`);
+                          return;
+                        }
+                        setAddBillOpen(false);
+                        router.refresh();
+                      } catch {
+                        setAddBillError("Network error.");
+                      } finally {
+                        setAddBillSaving(false);
+                      }
+                    }}
+                    className="rounded-lg bg-emerald-600 text-white px-3 py-2 text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {addBillSaving ? "Saving…" : "Create bill"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => !addBillSaving && setAddBillOpen(false)}
+                    disabled={addBillSaving}
                     className="rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 px-3 py-2 text-sm font-medium hover:bg-neutral-50 dark:hover:bg-neutral-700 disabled:opacity-50"
                   >
                     Cancel

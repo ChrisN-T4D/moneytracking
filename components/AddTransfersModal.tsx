@@ -239,7 +239,6 @@ export function AddTransfersModal({ open, onClose }: { open: boolean; onClose: (
         const msg = data.message ?? "Save failed.";
         setMessage(msg);
         setMessageIsError(true);
-        console.error("[AddTransfers] Save failed:", res.status, msg);
       } else {
         const totalSaved = data.saved ?? pairs.length + unpaired.length;
         setMessage(`Saved ${totalSaved} item${totalSaved !== 1 ? "s" : ""}.`);

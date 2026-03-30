@@ -78,7 +78,8 @@ function wellsFargoPayee(raw: string): string {
 
   if (/\bQuest\s+Diagnostic/i.test(s)) return "Quest Diagnostic";
   if (/\bGusto Payroll/i.test(s)) return "Gusto Payroll";
-  if (/\bFreedom Mtg/i.test(s)) return "Freedom Mortgage";
+  if (/\bRocket\s*Mtg\b|\bRocket\s*Mortgage\b|\bRocket\.com\b/i.test(s)) return "Oklahoma Mortgage";
+  if (/\bFreedom\s*Mtg/i.test(s)) return "Spanish Fork Mortgage";
   if (/\bDominion Energy/i.test(s)) return "Dominion Energy";
   if (/\bPershing Brokerage/i.test(s)) return "Pershing Brokerage";
   if (/\bProg Preferred Ins/i.test(s)) return "Progressive Insurance";

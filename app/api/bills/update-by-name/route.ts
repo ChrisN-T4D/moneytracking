@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { getPbBase } from "@/lib/pocketbase-auth";
+import { getPbBase, getTokenFromCookie } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
+import { oklahomaMortgagePocketBaseNameVariants, pocketBaseBillsFilterByNamesAndSection } from "@/lib/mortgageBillNames";
 
 export const dynamic = "force-dynamic";
 
 const allowedFrequencies = ["2weeks", "monthly", "yearly"] as const;
 
-/** PATCH /api/bills/update-by-name?name=...&account=...&listType=... — updates all bills matching name in that section. Body: { amount?, frequency?, nextDue? }. */
+/** PATCH /api/bills/update-by-name?name=...&account=...&listType=... — updates all bills matching name in that section. Body: { amount?, frequency?, nextDue?, name? }. */
 export async function PATCH(request: Request) {
   const base = getPbBase();
   if (!base) {
@@ -21,7 +22,7 @@ export async function PATCH(request: Request) {
   if (!account) return NextResponse.json({ ok: false, message: "account query param required." }, { status: 400 });
   if (!listType) return NextResponse.json({ ok: false, message: "listType query param required." }, { status: 400 });
 
-  let body: { amount?: number; frequency?: string; nextDue?: string };
+  let body: { amount?: number; frequency?: string; nextDue?: string; name?: string };
   try {
     body = (await request.json().catch(() => ({}))) as typeof body;
   } catch {
@@ -45,22 +46,36 @@ export async function PATCH(request: Request) {
   if (body.nextDue !== undefined) {
     payload.nextDue = String(body.nextDue ?? "").trim();
   }
+  if (body.name !== undefined) {
+    const v = String(body.name ?? "").trim();
+    if (!v) return NextResponse.json({ ok: false, message: "name cannot be empty." }, { status: 400 });
+    payload.name = v;
+  }
   if (Object.keys(payload).length === 0) {
-    return NextResponse.json({ ok: false, message: "Body must include at least one of: amount, frequency, nextDue." }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, message: "Body must include at least one of: amount, frequency, nextDue, name." },
+      { status: 400 }
+    );
   }
 
-  const apiBase = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
-  let token: string;
-  let resolvedBase: string;
-  try {
-    const r = await getAdminToken(apiBase, process.env.POCKETBASE_ADMIN_EMAIL ?? "", process.env.POCKETBASE_ADMIN_PASSWORD ?? "");
-    token = r.token;
-    resolvedBase = r.baseUrl.replace(/\/$/, "");
-  } catch {
-    return NextResponse.json({ ok: false, message: "Admin auth required." }, { status: 401 });
+  let token: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
+  let resolvedBase = base.replace(/\/$/, "");
+  if (!token) {
+    const apiBase = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
+    try {
+      const r = await getAdminToken(apiBase, process.env.POCKETBASE_ADMIN_EMAIL ?? "", process.env.POCKETBASE_ADMIN_PASSWORD ?? "");
+      token = r.token;
+      resolvedBase = r.baseUrl.replace(/\/$/, "");
+    } catch {
+      return NextResponse.json(
+        { ok: false, message: "Sign in or set PocketBase admin credentials for grouped bill updates." },
+        { status: 401 }
+      );
+    }
   }
 
-  const filter = encodeURIComponent(`name="${name.replace(/"/g, '\\"')}" && account="${account.replace(/"/g, '\\"')}" && listType="${listType.replace(/"/g, '\\"')}"`);
+  const nameVariants = oklahomaMortgagePocketBaseNameVariants(name);
+  const filter = encodeURIComponent(pocketBaseBillsFilterByNamesAndSection(nameVariants, account, listType));
   const listRes = await fetch(
     `${resolvedBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
     { cache: "no-store", headers: { Authorization: `Bearer ${token}` } }
@@ -74,8 +89,9 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: false, message: `No bills found matching name in this section.` }, { status: 404 });
   }
 
+  const uniqueIds = [...new Set(ids)];
   let updated = 0;
-  for (const id of ids) {
+  for (const id of uniqueIds) {
     const res = await fetch(`${resolvedBase}/api/collections/bills/records/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

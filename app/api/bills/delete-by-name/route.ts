@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { getPbBase } from "@/lib/pocketbase-auth";
+import { getPbBase, getTokenFromCookie } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
+import { oklahomaMortgagePocketBaseNameVariants, pocketBaseBillsFilterByNamesAndSection } from "@/lib/mortgageBillNames";
 
 export const dynamic = "force-dynamic";
 
@@ -19,18 +20,24 @@ export async function DELETE(request: Request) {
   if (!account) return NextResponse.json({ ok: false, message: "account query param required." }, { status: 400 });
   if (!listType) return NextResponse.json({ ok: false, message: "listType query param required." }, { status: 400 });
 
-  const apiBase = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
-  let token: string;
-  let resolvedBase: string;
-  try {
-    const r = await getAdminToken(apiBase, process.env.POCKETBASE_ADMIN_EMAIL ?? "", process.env.POCKETBASE_ADMIN_PASSWORD ?? "");
-    token = r.token;
-    resolvedBase = r.baseUrl.replace(/\/$/, "");
-  } catch {
-    return NextResponse.json({ ok: false, message: "Admin auth required." }, { status: 401 });
+  let token: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
+  let resolvedBase = base.replace(/\/$/, "");
+  if (!token) {
+    const apiBase = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
+    try {
+      const r = await getAdminToken(apiBase, process.env.POCKETBASE_ADMIN_EMAIL ?? "", process.env.POCKETBASE_ADMIN_PASSWORD ?? "");
+      token = r.token;
+      resolvedBase = r.baseUrl.replace(/\/$/, "");
+    } catch {
+      return NextResponse.json(
+        { ok: false, message: "Sign in or set PocketBase admin credentials for grouped bill delete." },
+        { status: 401 }
+      );
+    }
   }
 
-  const filter = encodeURIComponent(`name="${name.replace(/"/g, '\\"')}" && account="${account.replace(/"/g, '\\"')}" && listType="${listType.replace(/"/g, '\\"')}"`);
+  const nameVariants = oklahomaMortgagePocketBaseNameVariants(name);
+  const filter = encodeURIComponent(pocketBaseBillsFilterByNamesAndSection(nameVariants, account, listType));
   const listRes = await fetch(
     `${resolvedBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
     { cache: "no-store", headers: { Authorization: `Bearer ${token}` } }
@@ -39,7 +46,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ ok: false, message: `Could not fetch bills: ${listRes.status}` }, { status: 502 });
   }
   const listData = (await listRes.json()) as { items?: { id: string }[] };
-  const ids = (listData.items ?? []).map((b) => b.id);
+  const ids = [...new Set((listData.items ?? []).map((b) => b.id))];
   if (ids.length === 0) {
     return NextResponse.json({ ok: false, message: `No bills found matching name in this section.` }, { status: 404 });
   }

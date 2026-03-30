@@ -17,6 +17,8 @@ import type {
 } from "@/lib/types";
 import { suggestTagsForStatements, makeStatementPattern, matchRule } from "@/lib/statementTagging";
 import { findTransferPairs, isTransferDescription } from "@/lib/statementsAnalysis";
+import { PB } from "@/lib/pbFieldMap";
+import { syncGoalFromStatements } from "@/lib/recalculateGoalFromStatements";
 
 const POCKETBASE_URL = process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "";
 
@@ -43,58 +45,28 @@ async function getStatementsForTagging(): Promise<StatementRecord[]> {
         { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
       );
       if (res.ok) {
-        const data = (await res.json()) as {
-          items?: Array<{
-            id: string;
-            date?: string;
-            description?: string;
-            amount?: number;
-            balance?: number | null;
-            category?: string | null;
-            account?: string | null;
-            sourceFile?: string | null;
-            goalId?: string | null;
-            goal_id?: string | null;
-            pairedStatementId?: string | null;
-            transferFromAccount?: string | null;
-            transfer_from_account?: string | null;
-            transferToAccount?: string | null;
-            transfer_to_account?: string | null;
-          }>;
-        };
-        return (data.items ?? []).map((item) => {
-          const raw = item as Record<string, unknown>;
-          const goalIdRaw = raw.goalId ?? raw.goalid ?? raw.goal_id ?? null;
-          const goalId = goalIdRaw != null && String(goalIdRaw).trim() !== "" ? String(goalIdRaw).trim() : null;
-          const pairedRaw = raw.pairedStatementId ?? raw.paired_statement_id ?? raw.pairedstatementid ?? null;
-          const pairedStatementId = pairedRaw != null && String(pairedRaw).trim() !== "" ? String(pairedRaw).trim() : null;
-          const fromAcc = raw.transferFromAccount ?? raw.trasnferFromAccount ?? raw.transfer_from_account ?? null;
-          const toAcc = raw.transferToAccount ?? raw.transfer_to_account ?? null;
-          const tt = raw.targetType ?? raw.target_type ?? null;
-          const ts = raw.targetSection ?? raw.target_section ?? null;
-          const tn = raw.targetName ?? raw.target_name ?? null;
+        const data = (await res.json()) as { items?: Array<Record<string, unknown>> };
+        return (data.items ?? []).map((raw) => {
+          const str = (key: string) => {
+            const v = raw[key];
+            return v != null && String(v).trim() !== "" ? String(v).trim() : null;
+          };
           return {
-            id: item.id,
-            date: item.date ?? "",
-            description: item.description ?? "",
-            amount: Number(item.amount) || 0,
-            balance: item.balance != null ? Number(item.balance) : null,
-            category: item.category ?? null,
-            account: item.account ?? null,
-            sourceFile: item.sourceFile ?? null,
-            goalId,
-            pairedStatementId,
-            transferFromAccount: fromAcc != null && String(fromAcc).trim() !== "" ? String(fromAcc).trim() : null,
-            transferToAccount: toAcc != null && String(toAcc).trim() !== "" ? String(toAcc).trim() : null,
-            targetType:
-              tt != null && String(tt).trim() !== ""
-                ? (String(tt).trim() as StatementTagTargetType)
-                : null,
-            targetSection:
-              ts != null && String(ts).trim() !== ""
-                ? (String(ts).trim() as StatementRecord["targetSection"])
-                : null,
-            targetName: tn != null && String(tn).trim() !== "" ? String(tn).trim() : null,
+            id: String(raw.id ?? ""),
+            date: String(raw.date ?? ""),
+            description: String(raw.description ?? ""),
+            amount: Number(raw.amount) || 0,
+            balance: raw.balance != null ? Number(raw.balance) : null,
+            category: str("category"),
+            account: str("account"),
+            sourceFile: str(PB.statements.sourceFile),
+            goalId: str(PB.statements.goalId),
+            pairedStatementId: str(PB.statements.pairedStatementId),
+            transferFromAccount: str(PB.statements.transferFromAccount),
+            transferToAccount: str(PB.statements.transferToAccount),
+            targetType: str(PB.statements.targetType) as StatementTagTargetType | null,
+            targetSection: str(PB.statements.targetSection) as StatementRecord["targetSection"],
+            targetName: str(PB.statements.targetName),
           };
         });
       }
@@ -164,7 +136,6 @@ export async function GET(request: Request) {
       getAutoTransfers(),
     ]);
 
-    // In PocketBase: name = subsection, so extract unique names (subsections) grouped by listType
     const subsectionsByType: { bills: string[]; subscriptions: string[] } = {
       bills: [],
       subscriptions: [],
@@ -173,25 +144,18 @@ export async function GET(request: Request) {
     const billNamesByGroup: Record<string, string[]> = {};
     const seenBills = new Set<string>();
     const seenSubs = new Set<string>();
-    
-    console.log(
-      `[statement-tags GET] Processing ${bills.length} bills - name field = subsection`
-    );
 
     for (const bill of bills) {
-      // In PocketBase structure: name IS the subsection
       const subsection = bill.name?.trim();
 
       if (!subsection) continue;
 
-      // Normalise listType coming from PocketBase to "bills" / "subscriptions"
       const rawList = (bill.listType ?? "").toLowerCase();
       const listType: "bills" | "subscriptions" =
         rawList === "subscription" || rawList === "subscriptions"
           ? "subscriptions"
           : "bills";
 
-      // Collect global subsections by listType (independent of account)
       if (listType === "subscriptions" && !seenSubs.has(subsection)) {
         subsectionsByType.subscriptions.push(subsection);
         seenSubs.add(subsection);
@@ -200,7 +164,6 @@ export async function GET(request: Request) {
         seenBills.add(subsection);
       }
 
-      // Normalise account to our internal keys so it matches the UI's
       const rawAccount = (bill.account ?? "").toLowerCase();
       let accountKey: BillListAccount | null = null;
       if (rawAccount.includes("bill")) {
@@ -209,7 +172,6 @@ export async function GET(request: Request) {
         accountKey = "checking_account";
       }
 
-      // Also collect by (normalised) account+listType for Name dropdown
       if (accountKey) {
         const groupKey = `${accountKey}_${listType}`;
         if (!billNamesByGroup[groupKey]) {
@@ -221,7 +183,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Checking-only subsection (Groceries & Gas); do not add to bills_account
     const defaultCheckingBillsSubsections = ["Groceries & Gas"];
     for (const name of defaultCheckingBillsSubsections) {
       if (!seenBills.has(name)) {
@@ -245,31 +206,16 @@ export async function GET(request: Request) {
 
     subsectionsByType.bills.sort();
     subsectionsByType.subscriptions.sort();
-    // Sort bill names (subsections) within each group
     for (const key in billNamesByGroup) {
       billNamesByGroup[key].sort();
     }
 
-    console.log(
-      `[statement-tags GET] Found subsections - bills: ${subsectionsByType.bills.length}, subscriptions: ${subsectionsByType.subscriptions.length}`
-    );
-    console.log(
-      `[statement-tags GET] Subsections (bills):`,
-      subsectionsByType.bills
-    );
-    console.log(
-      `[statement-tags GET] Subsections (subscriptions):`,
-      subsectionsByType.subscriptions
-    );
-
-    // transfersOnly mode: return only transfer-like statements for Add Transfers modal
     if (transfersOnly) {
       const transferStatements = statements.filter((s) => isTransferDescription(s.description ?? ""));
       const { pairMap } = findTransferPairs(statements);
       const transferItems = transferStatements.map((s) => {
         const matched = matchRule(rules, s);
         const suggestedGoalId = matched?.rule?.goalId && String(matched.rule.goalId).trim() ? String(matched.rule.goalId).trim() : null;
-        // Prefer stored pairedStatementId from PocketBase so past work shows; fall back to heuristic pair
         const pairedId = s.pairedStatementId ?? pairMap.get(s.id) ?? null;
         return {
           id: s.id,
@@ -287,7 +233,6 @@ export async function GET(request: Request) {
           targetName: s.targetName ?? null,
         };
       });
-      // Bill options for "Count as bill" dropdown (outgoing transfers)
       const billOptions: { section: string; listType: "bills" | "subscriptions"; name: string }[] = [];
       for (const bill of bills) {
         const name = bill.name?.trim();
@@ -333,12 +278,8 @@ export async function GET(request: Request) {
       });
     }
 
-    // Exclude transfer-like statements from Add items to bills (they go to Add Transfers instead)
     const nonTransferStatements = statements.filter((s) => !isTransferDescription(s.description ?? ""));
 
-    // Split statements into two buckets:
-    // 1. needsReview — untagged (no non-ignore rule) or goal-linked
-    // 2. alreadyTagged — has a non-ignore rule match (user can optionally show to re-tag)
     const needsReview: typeof statements = [];
     const alreadyTagged: typeof statements = [];
     for (const s of nonTransferStatements) {
@@ -350,14 +291,12 @@ export async function GET(request: Request) {
       }
     }
 
-    // Generate suggestions for untagged statements
     const suggestions = suggestTagsForStatements(needsReview, rules);
     const taggedSuggestions = suggestTagsForStatements(alreadyTagged, rules);
 
     const { pairMap, primaryIds } = findTransferPairs(statements);
 
     const payload = [
-      // Untagged rows first
       ...suggestions.map((s) => {
         const stId = s.statement.id;
         return {
@@ -378,7 +317,6 @@ export async function GET(request: Request) {
           },
         };
       }),
-      // Already-tagged rows (hidden by default, shown via toggle)
       ...taggedSuggestions.map((s) => {
         const stId = s.statement.id;
         return {
@@ -401,7 +339,6 @@ export async function GET(request: Request) {
       }),
     ];
 
-    console.log(`[statement-tags GET] Returning ${payload.length} suggestions`);
     return NextResponse.json({
       ok: true,
       items: payload,
@@ -411,7 +348,6 @@ export async function GET(request: Request) {
       autoTransfers: autoTransfers.map((t) => ({ id: t.id, whatFor: t.whatFor ?? "" })),
     });
   } catch (e) {
-    console.error("GET /api/statement-tags error:", e);
     return NextResponse.json(
       { ok: false, message: e instanceof Error ? e.message : String(e) },
       { status: 500 }
@@ -428,7 +364,7 @@ interface IncomingTagItem {
   pattern?: string;
   targetType: StatementTagTargetType;
   targetSection?: BillListAccount | "spanish_fork" | null;
-  targetName?: string; // In PocketBase: name = subsection, so this IS the subsection
+  targetName?: string;
   goalId?: string | null;
   /** If this tag was auto-suggested and user changed it, mark as override. */
   wasAutoTagged?: boolean;
@@ -458,8 +394,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Build a lookup from any server-fetched statements (best-effort fallback).
-    // Client now sends description+amount directly so this is only needed for goalId patching.
     let stmtById = new Map<string, StatementRecord>();
     try {
       // Try normal fetch first, then admin auth fallback
@@ -476,21 +410,22 @@ export async function POST(request: Request) {
             { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
           );
           if (res.ok) {
-            const data = (await res.json()) as { items?: Array<{ id: string; date?: string; description?: string; amount?: number; balance?: number | null; category?: string | null; account?: string | null; sourceFile?: string | null; goalId?: string | null; goal_id?: string | null }> };
-            statements = (data.items ?? []).map((item) => {
-              const raw = item as Record<string, unknown>;
-              const gid = raw.goalId ?? raw.goalid ?? raw.goal_id;
-              const goalId = gid != null && String(gid).trim() !== "" ? String(gid).trim() : null;
+            const data = (await res.json()) as { items?: Array<Record<string, unknown>> };
+            statements = (data.items ?? []).map((raw) => {
+              const str = (key: string) => {
+                const v = raw[key];
+                return v != null && String(v).trim() !== "" ? String(v).trim() : null;
+              };
               return {
-                id: item.id,
-                date: item.date ?? "",
-                description: item.description ?? "",
-                amount: Number(item.amount) || 0,
-                balance: item.balance != null ? Number(item.balance) : null,
-                category: item.category ?? null,
-                account: item.account ?? null,
-                sourceFile: item.sourceFile ?? null,
-                goalId,
+                id: String(raw.id ?? ""),
+                date: String(raw.date ?? ""),
+                description: String(raw.description ?? ""),
+                amount: Number(raw.amount) || 0,
+                balance: raw.balance != null ? Number(raw.balance) : null,
+                category: str("category"),
+                account: str("account"),
+                sourceFile: str(PB.statements.sourceFile),
+                goalId: str(PB.statements.goalId),
               };
             });
           }
@@ -527,16 +462,14 @@ export async function POST(request: Request) {
         const name = s.name?.trim();
         if (name) existingSfKeys.add(normalizeKeyForGrouping(name));
       }
-    } catch (e) {
-      console.warn("[statement-tags POST] Could not load existing bills for dedup:", e);
+    } catch {
+      // proceed without dedup
     }
 
     let rulesCreated = 0;
     let billsUpserted = 0;
     const affectedGoalIds = new Set<string>();
-    console.log(`[statement-tags POST] Processing ${items.length} item(s). stmtById size: ${stmtById.size}`);
 
-    // Resolve admin auth for statement PATCH (goalId), goal currentAmount updates, and rule upserts
     let statementPatchBase = base;
     let statementPatchHeaders: Record<string, string> = { "Content-Type": "application/json" };
     try {
@@ -553,14 +486,11 @@ export async function POST(request: Request) {
     }
 
     for (const item of items) {
-      // Use client-supplied description/amount first, fall back to server-fetched statement
       const serverStmt = stmtById.get(item.statementId);
       const description = item.description?.trim() || serverStmt?.description || "";
       const amount = item.amount ?? serverStmt?.amount ?? 0;
 
-      // We need at least a description to build a meaningful pattern; skip if totally empty
       if (!description && !item.pattern) {
-        console.warn(`[statement-tags POST] Skipping item ${item.statementId} — no description or pattern.`);
         continue;
       }
 
@@ -568,13 +498,11 @@ export async function POST(request: Request) {
       const targetType = item.targetType;
       const targetSection = item.targetSection ?? null;
       const goalId = item.goalId && item.goalId.trim() ? item.goalId.trim() : null;
-      // In PocketBase: name = subsection, so targetName is the subsection/name
       const targetName =
         (item.targetName && item.targetName.trim()) ||
         description.slice(0, 40) ||
         "Item";
 
-      // Track which goals need currentAmount recalc (old and new)
       const prevGoalId = serverStmt?.goalId && serverStmt.goalId.trim() ? serverStmt.goalId.trim() : null;
       if (prevGoalId) affectedGoalIds.add(prevGoalId);
       if (goalId) affectedGoalIds.add(goalId);
@@ -585,46 +513,28 @@ export async function POST(request: Request) {
         (targetType === "bill" || targetType === "subscription" || targetType === "spanish_fork" || targetType === "variable_expense") &&
         targetSection &&
         targetName;
-      const statementPatchCamel = {
-        goalId: goalId ?? "",
-        targetType: isBillLike ? targetType : "",
-        targetSection: isBillLike ? targetSection : "",
-        targetName: isBillLike ? targetName : "",
-      };
-      const statementPatchLower = {
-        goalid: goalId ?? "",
-        targettype: isBillLike ? targetType : "",
-        targetsection: isBillLike ? targetSection : "",
-        targetname: isBillLike ? targetName : "",
+      const stmtPatch = {
+        [PB.statements.goalId]: goalId ?? "",
+        [PB.statements.targetType]: isBillLike ? targetType : "",
+        [PB.statements.targetSection]: isBillLike ? targetSection : "",
+        [PB.statements.targetName]: isBillLike ? targetName : "",
       };
       try {
-        let patchRes = await fetch(
+        const patchRes = await fetch(
           `${statementPatchBase}/api/collections/statements/records/${item.statementId}`,
           {
             method: "PATCH",
             headers: statementPatchHeaders,
-            body: JSON.stringify(statementPatchCamel),
+            body: JSON.stringify(stmtPatch),
           }
         );
-        if (!patchRes.ok && patchRes.status === 400) {
-          patchRes = await fetch(
-            `${statementPatchBase}/api/collections/statements/records/${item.statementId}`,
-            {
-              method: "PATCH",
-              headers: statementPatchHeaders,
-              body: JSON.stringify(statementPatchLower),
-            }
-          );
-        }
         if (!patchRes.ok) {
-          const errText = await patchRes.text();
-          console.error(`Failed to save statement tag ${item.statementId}: ${patchRes.status} ${errText}`);
+          await patchRes.text();
         }
-      } catch (err) {
-        console.error(`Failed to save statement tag ${item.statementId}:`, err);
+      } catch {
+        // PATCH failed, continue with rule upsert
       }
 
-      // Upsert rule: match on pattern only for now.
       const existingRulesRes = await fetch(
         `${base}/api/collections/statement_tag_rules/records?perPage=1&filter=${encodeURIComponent(
           `pattern="${pattern}"`
@@ -643,7 +553,6 @@ export async function POST(request: Request) {
         existingRule = existing ?? null;
       }
 
-      // Check if user overrode an auto-tagged suggestion
       const wasOverride = item.wasAutoTagged && 
         item.originalSuggestion &&
         (item.originalSuggestion.targetType !== targetType ||
@@ -656,7 +565,6 @@ export async function POST(request: Request) {
       const newUseCount = wasOverride ? currentUseCount : currentUseCount + 1;
       const newOverrideCount = wasOverride ? currentOverrideCount + 1 : currentOverrideCount;
 
-      // Note: subsection is not stored separately - name IS the subsection in PocketBase
       const rulePayload = {
         pattern,
         normalizedDescription: targetName,
@@ -680,7 +588,6 @@ export async function POST(request: Request) {
         );
         ruleSaveOk = res.ok;
       } else {
-        // New rule - initialize with useCount=1 if not an override
         const newRulePayload = {
           ...rulePayload,
           useCount: wasOverride ? 0 : 1,
@@ -698,7 +605,6 @@ export async function POST(request: Request) {
       }
       if (ruleSaveOk) rulesCreated++;
 
-      // If this is a bill-like tag, create a new bill subsection only when one doesn't already exist.
       if (
         (targetType === "bill" ||
           targetType === "subscription" ||
@@ -711,7 +617,7 @@ export async function POST(request: Request) {
         if (targetSection === "spanish_fork") {
           if (!existingSfKeys.has(normalizedName)) {
             const sfPayload = {
-              name: targetName, // name IS the subsection
+              name: targetName,
               frequency: "monthly",
               nextDue: new Date().toISOString().slice(0, 10),
               inThisPaycheck: false,
@@ -738,7 +644,7 @@ export async function POST(request: Request) {
           const billKey = `${account}_${listType}_${normalizedName}`;
           if (!existingBillsKeys.has(billKey)) {
             const billPayload = {
-              name: targetName, // name IS the subsection
+              name: targetName,
               frequency: "monthly",
               nextDue: new Date().toISOString().slice(0, 10),
               inThisPaycheck: false,
@@ -763,55 +669,17 @@ export async function POST(request: Request) {
       }
     }
 
-    // Recalculate currentAmount for each affected goal: sum |amount| of all statements tagged to that goal (negative = payment toward goal → increases currentAmount)
     if (affectedGoalIds.size > 0 && statementPatchHeaders.Authorization) {
-      const adminBase = statementPatchBase;
+      const hdrs = statementPatchHeaders as Record<string, string>;
       for (const gid of affectedGoalIds) {
         try {
-          let total = 0;
-          let page = 1;
-          const perPage = 500;
-          while (true) {
-            let filter = encodeURIComponent(`goalid="${gid}"`);
-            let res = await fetch(
-              `${adminBase}/api/collections/statements/records?filter=${filter}&perPage=${perPage}&page=${page}&sort=-date`,
-              { cache: "no-store", headers: statementPatchHeaders }
-            );
-            if (!res.ok) {
-              filter = encodeURIComponent(`goalId="${gid}"`);
-              res = await fetch(
-                `${adminBase}/api/collections/statements/records?filter=${filter}&perPage=${perPage}&page=${page}&sort=-date`,
-                { cache: "no-store", headers: statementPatchHeaders }
-              );
-            }
-            if (!res.ok) break;
-            const data = (await res.json()) as { items?: Array<{ amount?: number }>; totalItems?: number };
-            const items = data.items ?? [];
-            for (const row of items) {
-              total += Math.abs(Number(row.amount) || 0);
-            }
-            const totalItems = data.totalItems ?? 0;
-            if (page * perPage >= totalItems || items.length === 0) break;
-            page++;
-          }
-          const patchGoalRes = await fetch(
-            `${adminBase}/api/collections/goals/records/${gid}`,
-            {
-              method: "PATCH",
-              headers: statementPatchHeaders,
-              body: JSON.stringify({ currentAmount: total }),
-            }
-          );
-          if (!patchGoalRes.ok) {
-            console.error(`Failed to update goal ${gid} currentAmount: ${patchGoalRes.status}`);
-          }
-        } catch (err) {
-          console.error(`Error recalculating goal ${gid} currentAmount:`, err);
+          await syncGoalFromStatements(gid, statementPatchBase, hdrs);
+        } catch {
+          // best-effort goal sync
         }
       }
     }
 
-    console.log(`[statement-tags POST] Done. rulesCreated=${rulesCreated} billsUpserted=${billsUpserted}`);
     return NextResponse.json({
       ok: true,
       rulesCreated,

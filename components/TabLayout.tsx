@@ -8,24 +8,21 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { id: "recurring", label: "Recurring" },
+  { id: "checkin", label: "Check-In" },
   { id: "goals", label: "Goals" },
   { id: "bills", label: "Bills" },
-  { id: "accounts", label: "Accounts" },
 ];
 
 export function TabLayout({
-  recurringContent,
+  checkinContent,
   goalsContent,
   billsContent,
-  accountsContent,
 }: {
-  recurringContent: ReactNode;
+  checkinContent: ReactNode;
   goalsContent: ReactNode;
   billsContent: ReactNode;
-  accountsContent: ReactNode;
 }) {
-  const [activeTab, setActiveTab] = useState("recurring");
+  const [activeTab, setActiveTab] = useState("checkin");
 
   return (
     <>
@@ -46,10 +43,9 @@ export function TabLayout({
         ))}
       </div>
       <div>
-        {activeTab === "recurring" && <Fragment key="recurring">{recurringContent}</Fragment>}
+        {activeTab === "checkin" && <Fragment key="checkin">{checkinContent}</Fragment>}
         {activeTab === "goals" && <Fragment key="goals">{goalsContent}</Fragment>}
         {activeTab === "bills" && <Fragment key="bills">{billsContent}</Fragment>}
-        {activeTab === "accounts" && <Fragment key="accounts">{accountsContent}</Fragment>}
       </div>
     </>
   );

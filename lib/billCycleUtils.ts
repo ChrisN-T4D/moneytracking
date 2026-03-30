@@ -20,21 +20,6 @@ export function lastPaidDate(breakdown: ActualBreakdownItem[] | undefined): Date
   return new Date(sorted[0].date);
 }
 
-/** Determine paid-cycle status for a bill row. Returns null if we can't tell. */
-export function paidCycleStatus(
-  frequency: string,
-  breakdown: ActualBreakdownItem[] | undefined,
-  _paidAmt: number | undefined
-): { isPaid: boolean; lastDate: Date; nextCycleDate: Date } | null {
-  const last = lastPaidDate(breakdown);
-  if (!last) return null;
-  const nextCycle = addCycle(last, frequency);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const isPaid = nextCycle > today;
-  return { isPaid, lastDate: last, nextCycleDate: nextCycle };
-}
-
 /** Format YYYY-MM-DD for a date at local midnight (for comparison with statement dates). */
 function toDateOnly(d: Date): string {
   const y = d.getFullYear();
@@ -45,18 +30,21 @@ function toDateOnly(d: Date): string {
 
 /**
  * Sum amounts in breakdown for "this cycle" and "last cycle".
- * - When frequency is "monthly": this cycle = current calendar month, last cycle = previous month (uses refDate or today).
+ * - When frequency is "monthly": this cycle = calendar month of `calendarRef` (if set) else `paycheckEndDate` else today; last cycle = previous month.
  * - Otherwise (e.g. 2weeks): this cycle = 2-week window (paycheckEnd - 14 days through paycheckEnd), last = prior 2 weeks.
  * Statement dates are compared as YYYY-MM-DD strings.
  */
 export function paidThisAndLastCycle(
   breakdown: ActualBreakdownItem[] | undefined,
   paycheckEndDate: Date | null,
-  frequency?: string
+  frequency?: string,
+  calendarRef?: Date | null
 ): { thisCycle: number; lastCycle: number } {
   const result = { thisCycle: 0, lastCycle: 0 };
   if (!breakdown?.length) return result;
-  const ref = paycheckEndDate ?? new Date();
+  const freqNorm = (frequency ?? "").toLowerCase().replace(/\s/g, "");
+  const isMonthly = freqNorm === "monthly";
+  const ref = isMonthly ? (calendarRef ?? paycheckEndDate ?? new Date()) : (paycheckEndDate ?? new Date());
   const end = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
 
   let thisStartStr: string;
@@ -64,20 +52,17 @@ export function paidThisAndLastCycle(
   let lastStartStr: string;
   let lastEndStr: string;
 
-  if (frequency === "monthly") {
-    // Current month: first day through last day
+  if (freqNorm === "monthly") {
     const thisStart = new Date(end.getFullYear(), end.getMonth(), 1);
     const thisEnd = new Date(end.getFullYear(), end.getMonth() + 1, 0);
     thisStartStr = toDateOnly(thisStart);
     thisEndStr = toDateOnly(thisEnd);
-    // Previous month
     const lastStart = new Date(end.getFullYear(), end.getMonth() - 1, 1);
     const lastEnd = new Date(end.getFullYear(), end.getMonth(), 0);
     lastStartStr = toDateOnly(lastStart);
     lastEndStr = toDateOnly(lastEnd);
   } else {
     if (!paycheckEndDate) return result;
-    // 2-week cycle
     const thisStart = new Date(end);
     thisStart.setDate(thisStart.getDate() - 14);
     const lastStart = new Date(thisStart);
@@ -96,4 +81,75 @@ export function paidThisAndLastCycle(
     else if (dateStr >= lastStartStr && dateStr <= lastEndStr) result.lastCycle += t.amount;
   }
   return result;
+}
+
+export type PaidCycleOptions = {
+  /** For monthly bills: which calendar month's payments count as "this cycle" (e.g. budgeting display month). */
+  calendarRef?: Date | null;
+  /** For 2-week bills: end of the current paycheck window (same as Bills list). */
+  paycheckEndDate?: Date | null;
+};
+
+/**
+ * Paid status aligned with `paidThisAndLastCycle` / statement month:
+ * - **monthly**: paid only if there is tagged spend in the calendar month of `calendarRef` (default: today).
+ * - **2weeks**: paid only if there is spend in the current 2-week window ending `paycheckEndDate`.
+ * - **other** (e.g. yearly): rolling rule from most recent breakdown date (legacy).
+ */
+export function paidCycleStatus(
+  frequency: string,
+  breakdown: ActualBreakdownItem[] | undefined,
+  _paidAmt: number | undefined,
+  options?: PaidCycleOptions
+): { isPaid: boolean; lastDate: Date; nextCycleDate: Date } | null {
+  const f = (frequency ?? "").toLowerCase().replace(/\s/g, "");
+
+  if (f === "monthly") {
+    const calRef = options?.calendarRef ?? new Date();
+    const r = new Date(calRef.getFullYear(), calRef.getMonth(), calRef.getDate());
+    r.setHours(0, 0, 0, 0);
+    const { thisCycle } = paidThisAndLastCycle(breakdown, null, "monthly", r);
+    if (thisCycle <= 0) return null;
+    const monthStart = new Date(r.getFullYear(), r.getMonth(), 1);
+    const monthEnd = new Date(r.getFullYear(), r.getMonth() + 1, 0);
+    const startStr = toDateOnly(monthStart);
+    const endStr = toDateOnly(monthEnd);
+    const inMonth = (breakdown ?? []).filter((t) => {
+      const d = t.date.slice(0, 10);
+      return d >= startStr && d <= endStr;
+    });
+    if (inMonth.length === 0) return null;
+    const sorted = [...inMonth].sort((a, b) => b.date.localeCompare(a.date));
+    const lastDate = new Date(sorted[0]!.date);
+    const nextCycleDate = addCycle(lastDate, frequency);
+    return { isPaid: true, lastDate, nextCycleDate };
+  }
+
+  if (f === "2weeks") {
+    const pe = options?.paycheckEndDate ?? null;
+    const { thisCycle } = paidThisAndLastCycle(breakdown, pe, "2weeks");
+    if (thisCycle <= 0 || !pe) return null;
+    const end = new Date(pe.getFullYear(), pe.getMonth(), pe.getDate());
+    const thisStart = new Date(end);
+    thisStart.setDate(thisStart.getDate() - 14);
+    const startStr = toDateOnly(thisStart);
+    const endStr = toDateOnly(end);
+    const inWin = (breakdown ?? []).filter((t) => {
+      const d = t.date.slice(0, 10);
+      return d >= startStr && d <= endStr;
+    });
+    if (inWin.length === 0) return null;
+    const sorted = [...inWin].sort((a, b) => b.date.localeCompare(a.date));
+    const lastDate = new Date(sorted[0]!.date);
+    const nextCycleDate = addCycle(lastDate, frequency);
+    return { isPaid: true, lastDate, nextCycleDate };
+  }
+
+  const last = lastPaidDate(breakdown);
+  if (!last) return null;
+  const nextCycle = addCycle(last, frequency);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isPaid = nextCycle > today;
+  return { isPaid, lastDate: last, nextCycleDate: nextCycle };
 }

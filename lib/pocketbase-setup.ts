@@ -224,6 +224,9 @@ export async function createCollections(
         textField("account", true),
         textField("listType", true),
         textField("subsection", false),
+        textField("recurringPaidCycle", false),
+        textField("recurringPaidGoalId", false),
+        textField("recurringPaidStatementId", false),
       ],
     },
     {
@@ -245,6 +248,9 @@ export async function createCollections(
         boolField("inThisPaycheck", true),
         numberField("amount", true),
         boolField("tenantPaid", false),
+        textField("recurringPaidCycle", false),
+        textField("recurringPaidGoalId", false),
+        textField("recurringPaidStatementId", false),
       ],
     },
     {

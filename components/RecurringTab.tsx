@@ -1,25 +1,67 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { formatCurrency, displayBillName } from "@/lib/format";
 import { buildRecurringEvents, type RecurringEvent } from "@/lib/recurringEvents";
-import type { PaycheckConfig, AutoTransfer, SpanishForkBill } from "@/lib/types";
+import type { PaycheckConfig, AutoTransfer, SpanishForkBill, MoneyGoal } from "@/lib/types";
 import type { BillOrSubWithMeta } from "@/lib/pocketbase";
+import { creditAmountForMarkPaid } from "@/lib/goalRouting";
 import { getNeededBeforeNextPaycheckBreakdown } from "@/lib/summaryCalculations";
 import { getCardClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
+
+export type RecurringProjectionSnapshot = {
+  requiredThisPaycheckByAccount: { checkingAccount: number; billsAccount: number; spanishFork: number };
+  nextBillsInflowAmount: number;
+  nextSpanishForkInflowAmount: number;
+  transfersOutOfCheckingTotal: number;
+};
 
 interface RecurringTabProps {
   paycheckConfigs: PaycheckConfig[];
   billsWithMeta: BillOrSubWithMeta[];
   spanishForkBills: SpanishForkBill[];
   autoTransfers: AutoTransfer[];
-  paidThisMonthByBill: Map<string, number>;
-  paidThisMonthByAccount: { checking: number; bills: number; spanishFork: number };
-  incomeThisMonth: number;
+  /** For goal routing when marking paid (goal.category ↔ bill subsection). */
+  goals: MoneyGoal[];
   today: Date;
-  /** Needed per account before next paycheck (for "Totals by account" section). */
-  requiredThisPaycheckByAccount?: { checkingAccount: number; billsAccount: number; spanishFork: number };
+  initialAccountBalances: { checking: number | null; bills: number | null; spanishFork: number | null };
+  /** Same paycheck/transfer snapshot as the main dashboard (not tied to Recurring view month). */
+  recurringProjection: RecurringProjectionSnapshot;
+}
+
+type CheckInKey = "checking" | "bills" | "spanishFork";
+
+const CHECK_IN_LABELS: Record<CheckInKey, string> = {
+  checking: "Joint Checking",
+  bills: "Oklahoma Bills",
+  spanishFork: "Spanish Fork",
+};
+
+function adjustedCheckInForProjection(
+  key: CheckInKey,
+  entered: number | null,
+  proj: RecurringProjectionSnapshot
+): number | null {
+  if (entered === null) return null;
+  if (key === "checking") return entered - proj.transfersOutOfCheckingTotal;
+  if (key === "bills") return entered + proj.nextBillsInflowAmount;
+  return entered + proj.nextSpanishForkInflowAmount;
+}
+
+function requiredForCheckInKey(
+  key: CheckInKey,
+  req: RecurringProjectionSnapshot["requiredThisPaycheckByAccount"]
+): number {
+  if (key === "checking") return req.checkingAccount;
+  if (key === "bills") return req.billsAccount;
+  return req.spanishFork;
+}
+
+function checkInEnough(adjusted: number | null, required: number): boolean {
+  if (adjusted === null) return false;
+  return required <= 0 || adjusted >= required;
 }
 
 const ACCOUNT_LABELS: Record<string, string> = {
@@ -34,6 +76,37 @@ function accountLabel(account: string): string {
   if (lower.includes("spanish")) return ACCOUNT_LABELS.spanish_fork;
   if (lower.includes("checking")) return ACCOUNT_LABELS.checking_account;
   return ACCOUNT_LABELS[account] ?? account;
+}
+
+
+function RecurringMarkPaidButton({
+  event: e,
+  busy,
+  onToggle,
+}: {
+  event: RecurringEvent;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  if (e.type !== "expense" || !e.manualPaid) return null;
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={(ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        onToggle();
+      }}
+      className={`rounded-md border px-2 py-1 text-[10px] sm:text-[11px] font-medium leading-tight shrink-0 transition-colors min-h-[28px] sm:min-h-0 disabled:opacity-50 ${
+        e.isPaid
+          ? "border-emerald-500/60 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-600/50"
+          : "border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+      }`}
+    >
+      {busy ? "…" : e.isPaid ? "Unmark" : "Mark paid"}
+    </button>
+  );
 }
 
 function toYMD(d: Date): string {
@@ -87,19 +160,39 @@ export function RecurringTab({
   billsWithMeta,
   spanishForkBills,
   autoTransfers,
-  paidThisMonthByBill,
-  paidThisMonthByAccount,
-  incomeThisMonth,
+  goals,
   today,
-  requiredThisPaycheckByAccount,
+  initialAccountBalances,
+  recurringProjection,
 }: RecurringTabProps) {
+  const router = useRouter();
   const { theme } = useTheme();
   const [viewMonth, setViewMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [view, setView] = useState<"list" | "calendar">("list");
-  const [showPreviousDays, setShowPreviousDays] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [neededBreakdownOpen, setNeededBreakdownOpen] = useState<"checking_account" | "bills_account" | "spanish_fork" | null>(null);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
+  const [manualPaidPendingId, setManualPaidPendingId] = useState<string | null>(null);
+  const [goalPickFor, setGoalPickFor] = useState<RecurringEvent | null>(null);
+  const [goalPickSelectedId, setGoalPickSelectedId] = useState("");
+  const [checkInBalances, setCheckInBalances] = useState<Record<CheckInKey, number | null>>(() => ({
+    checking: initialAccountBalances.checking,
+    bills: initialAccountBalances.bills,
+    spanishFork: initialAccountBalances.spanishFork,
+  }));
+  const [checkInEditing, setCheckInEditing] = useState<CheckInKey | null>(null);
+  const [checkInEditValue, setCheckInEditValue] = useState("");
+  const [checkInSaving, setCheckInSaving] = useState(false);
+
+  const { requiredThisPaycheckByAccount } = recurringProjection;
+
+  useEffect(() => {
+    setCheckInBalances({
+      checking: initialAccountBalances.checking,
+      bills: initialAccountBalances.bills,
+      spanishFork: initialAccountBalances.spanishFork,
+    });
+  }, [initialAccountBalances.checking, initialAccountBalances.bills, initialAccountBalances.spanishFork]);
 
   const neededBreakdown = useMemo(
     () => getNeededBeforeNextPaycheckBreakdown(billsWithMeta, spanishForkBills),
@@ -120,44 +213,197 @@ export function RecurringTab({
   const todayYMD = toYMD(today);
 
   const events = useMemo(
-    () => buildRecurringEvents(paycheckConfigs, billsWithMeta, spanishForkBills, autoTransfers, year, month, paidThisMonthByBill),
-    [paycheckConfigs, billsWithMeta, spanishForkBills, autoTransfers, year, month, paidThisMonthByBill]
+    () =>
+      buildRecurringEvents(
+        paycheckConfigs,
+        billsWithMeta,
+        spanishForkBills,
+        autoTransfers,
+        year,
+        month,
+        goals
+      ),
+    [paycheckConfigs, billsWithMeta, spanishForkBills, autoTransfers, year, month, goals]
   );
 
-  const totalIncome = events.filter((e) => e.type === "income").reduce((s, e) => s + e.amount, 0);
-  const totalExpenses = events.filter((e) => e.type === "expense").reduce((s, e) => s + e.amount, 0);
+  const applyMarkPaidWithGoal = useCallback(
+    async (e: RecurringEvent, goalId: string | null) => {
+      const mp = e.manualPaid;
+      if (!mp || e.type !== "expense") return;
 
-  const paidExpenses = isCurrentMonth
-    ? paidThisMonthByAccount.checking + paidThisMonthByAccount.bills + paidThisMonthByAccount.spanishFork
-    : 0;
-  const receivedIncome = isCurrentMonth ? incomeThisMonth : 0;
-  const remainingIncome = Math.max(0, totalIncome - receivedIncome);
-  const remainingExpenses = Math.max(0, totalExpenses - paidExpenses);
+      const pickedCandidate = goalId
+        ? mp.goalCandidates.find((c) => c.id === goalId)
+        : undefined;
+      const selectedGoal = goalId
+        ? goals.find((g) => g.id === goalId)
+        : undefined;
+      const goalForCredit =
+        selectedGoal ?? (pickedCandidate ? { name: pickedCandidate.name } : undefined);
+      const credit =
+        goalForCredit && goalId
+          ? creditAmountForMarkPaid(mp.membersForCredit, goalForCredit, mp.lineAmount)
+          : 0;
 
-  // Per-account incoming (income + transfer in) and outgoing (expense + transfer out)
-  const incomingByAccount = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const e of events) {
-      if (e.type === "income") {
-        m[e.account] = (m[e.account] ?? 0) + e.amount;
-      } else if (e.type === "transfer") {
-        m[e.account] = (m[e.account] ?? 0) + e.amount;
+      const res = await fetch("/api/recurring-mark-paid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          action: "mark",
+          collection: mp.collection,
+          billIds: mp.ids,
+          cycleKey: mp.cycleKey,
+          goalId,
+          creditAmount: credit,
+          dateYmd: e.date,
+          lineLabel: e.name,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        statementId?: string | null;
+      };
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.message ?? `Save failed (${res.status})`);
       }
-    }
-    return m;
-  }, [events]);
+      router.refresh();
+    },
+    [goals, router]
+  );
 
-  const outgoingByAccount = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const e of events) {
-      if (e.type === "expense") {
-        m[e.account] = (m[e.account] ?? 0) + e.amount;
-      } else if (e.type === "transfer" && e.fromAccount) {
-        m[e.fromAccount] = (m[e.fromAccount] ?? 0) + e.amount;
+  const applyUnmarkPaid = useCallback(
+    async (e: RecurringEvent) => {
+      const mp = e.manualPaid;
+      if (!mp || e.type !== "expense") return;
+
+      const res = await fetch("/api/recurring-mark-paid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          action: "unmark",
+          collection: mp.collection,
+          billIds: mp.ids,
+          storedStatementId: mp.storedStatementId,
+          storedGoalId: mp.storedGoalId,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+      };
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.message ?? `Save failed (${res.status})`);
       }
+      router.refresh();
+    },
+    [router]
+  );
+
+  const onMarkPaidClick = useCallback(
+    async (e: RecurringEvent) => {
+      if (e.type !== "expense" || !e.manualPaid) return;
+      if (e.isPaid) {
+        setManualPaidPendingId(e.id);
+        try {
+          await applyUnmarkPaid(e);
+        } catch (err) {
+          window.alert(err instanceof Error ? err.message : "Could not unmark paid.");
+        } finally {
+          setManualPaidPendingId(null);
+        }
+        return;
+      }
+      const c = e.manualPaid.goalCandidates;
+      if (c.length >= 1) {
+        setGoalPickSelectedId(c[0]?.id ?? "");
+        setGoalPickFor(e);
+        return;
+      }
+      const gid = null;
+      setManualPaidPendingId(e.id);
+      try {
+        await applyMarkPaidWithGoal(e, gid);
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : "Could not update paid status.");
+      } finally {
+        setManualPaidPendingId(null);
+      }
+    },
+    [applyMarkPaidWithGoal, applyUnmarkPaid]
+  );
+
+  async function confirmGoalPick() {
+    const e = goalPickFor;
+    if (!e) return;
+    const gid = goalPickSelectedId?.trim() ?? "";
+    if (!gid) {
+      window.alert("Select a goal before marking paid.");
+      return;
     }
-    return m;
-  }, [events]);
+    setGoalPickFor(null);
+    setManualPaidPendingId(e.id);
+    try {
+      await applyMarkPaidWithGoal(e, gid);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Could not update paid status.");
+    } finally {
+      setManualPaidPendingId(null);
+    }
+  }
+
+  const checkInKeys = ["checking", "bills", "spanishFork"] as const satisfies readonly CheckInKey[];
+
+  function startCheckInEdit(key: CheckInKey) {
+    setCheckInEditing(key);
+    setCheckInEditValue(checkInBalances[key] != null ? String(checkInBalances[key]) : "");
+  }
+
+  async function commitCheckInEdit(key: CheckInKey) {
+    const raw = checkInEditValue.trim();
+    let num: number | null;
+    if (raw === "") {
+      num = null;
+    } else {
+      const parsed = Number(raw);
+      if (Number.isNaN(parsed)) {
+        window.alert("Enter a valid number.");
+        setCheckInEditing(null);
+        return;
+      }
+      num = parsed;
+    }
+    setCheckInEditing(null);
+    if (num === checkInBalances[key]) return;
+    const prev = checkInBalances[key];
+    setCheckInBalances((b) => ({ ...b, [key]: num }));
+    setCheckInSaving(true);
+    try {
+      const res = await fetch("/api/summary", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          checkingBalance: key === "checking" ? num : undefined,
+          billsBalance: key === "bills" ? num : undefined,
+          spanishForkBalance: key === "spanishFork" ? num : undefined,
+        }),
+      });
+      if (!res.ok) {
+        setCheckInBalances((b) => ({ ...b, [key]: prev }));
+        const t = await res.text().catch(() => "");
+        window.alert(t || "Could not save balance.");
+      } else {
+        router.refresh();
+      }
+    } catch (e) {
+      setCheckInBalances((b) => ({ ...b, [key]: prev }));
+      window.alert(e instanceof Error ? e.message : "Could not save balance.");
+    } finally {
+      setCheckInSaving(false);
+    }
+  }
 
   // Upcoming events (after today) for list view
   const upcomingEvents = useMemo(() => {
@@ -319,46 +565,110 @@ export function RecurringTab({
         </div>
       </div>
 
-      {/* Summary bars */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className={getCardClasses(theme.summary)}>
-          <p className="text-[11px] font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Income</p>
-          <p className="text-lg font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatCurrency(totalIncome)}</p>
-          {isCurrentMonth && (
-            <div className="mt-1 space-y-0.5">
-              <div className="flex justify-between text-[11px]">
-                <span className="text-neutral-500 dark:text-neutral-400">Received</span>
-                <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">{formatCurrency(receivedIncome)}</span>
-              </div>
-              <div className="flex justify-between text-[11px]">
-                <span className="text-neutral-500 dark:text-neutral-400">Remaining</span>
-                <span className="text-neutral-600 dark:text-neutral-300 tabular-nums">{formatCurrency(remainingIncome)}</span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-neutral-200 dark:bg-neutral-700 mt-1 overflow-hidden">
-                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${totalIncome > 0 ? Math.min(100, (receivedIncome / totalIncome) * 100) : 0}%` }} />
-              </div>
-            </div>
-          )}
+      {/* Check-in balances — same summary fields as Account levels; projection matches home (next paycheck window). */}
+      <div className={getCardClasses(theme.summary)}>
+        <h2 className="text-sm font-semibold text-neutral-900 dark:text-white mb-1">Check-in balances</h2>
+        <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mb-3">
+          Enter actual balances (saved for everyone). Green = enough for this paycheck after recurring transfers through next payday.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[320px]">
+            <thead>
+              <tr className="text-xs text-neutral-500 dark:text-neutral-400 border-b border-neutral-200 dark:border-neutral-600">
+                <th className="text-left font-medium pb-1.5 pr-2">Account</th>
+                <th className="text-right font-medium pb-1.5">Required</th>
+                <th className="text-right font-medium pb-1.5 pl-2">Balance</th>
+                <th className="text-right font-medium pb-1.5 pl-2 hidden sm:table-cell">Adjusted</th>
+                <th className="text-right font-medium pb-1.5 pl-2">OK?</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100 dark:divide-neutral-700/50">
+              {checkInKeys.map((key) => {
+                const required = requiredForCheckInKey(key, requiredThisPaycheckByAccount);
+                const entered = checkInBalances[key];
+                const adjusted = adjustedCheckInForProjection(key, entered, recurringProjection);
+                const enough = checkInEnough(adjusted, required);
+                const editing = checkInEditing === key;
+                let footnote: string | null = null;
+                if (key === "checking" && recurringProjection.transfersOutOfCheckingTotal > 0) {
+                  footnote = `After −${formatCurrency(recurringProjection.transfersOutOfCheckingTotal)} transfers out`;
+                } else if (key === "bills" && recurringProjection.nextBillsInflowAmount > 0) {
+                  footnote = `Includes +${formatCurrency(recurringProjection.nextBillsInflowAmount)} incoming transfer`;
+                } else if (key === "spanishFork" && recurringProjection.nextSpanishForkInflowAmount > 0) {
+                  footnote = `Includes +${formatCurrency(recurringProjection.nextSpanishForkInflowAmount)} incoming transfer`;
+                }
+
+                return (
+                  <tr key={key}>
+                    <td className="py-3 align-top font-medium text-neutral-700 dark:text-neutral-300 pr-2">
+                      <div>{CHECK_IN_LABELS[key]}</div>
+                      {footnote && (
+                        <p className="mt-1 text-[10px] text-neutral-500 dark:text-neutral-400 font-normal normal-case sm:hidden">
+                          {footnote}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3 align-top text-right tabular-nums text-neutral-600 dark:text-neutral-400">
+                      {formatCurrency(required)}
+                    </td>
+                    <td className="py-3 align-top pl-2 text-right">
+                      {editing ? (
+                        <input
+                          autoFocus
+                          type="number"
+                          inputMode="decimal"
+                          value={checkInEditValue}
+                          onChange={(e) => setCheckInEditValue(e.target.value)}
+                          onBlur={() => void commitCheckInEdit(key)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void commitCheckInEdit(key);
+                            if (e.key === "Escape") setCheckInEditing(null);
+                          }}
+                          className="w-24 rounded border border-sky-400 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-right text-sm tabular-nums text-neutral-900 dark:text-neutral-100 outline-none"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startCheckInEdit(key)}
+                          title="Tap to enter balance"
+                          className={`tabular-nums font-medium underline-offset-2 hover:underline cursor-text ${
+                            entered === null
+                              ? "text-neutral-400 dark:text-neutral-500"
+                              : enough
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-red-600 dark:text-red-400"
+                          }`}
+                        >
+                          {entered === null ? "—" : formatCurrency(entered)}
+                        </button>
+                      )}
+                    </td>
+                    <td className="py-3 align-top pl-2 text-right hidden sm:table-cell">
+                      <span className="tabular-nums text-neutral-700 dark:text-neutral-200">
+                        {adjusted === null ? "—" : formatCurrency(adjusted)}
+                      </span>
+                      {footnote && (
+                        <p className="mt-1 text-[10px] text-neutral-500 dark:text-neutral-400 whitespace-normal max-w-[140px] ml-auto">
+                          {footnote}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3 align-top pl-2 text-right">
+                      {adjusted === null ? (
+                        <span className="text-xs text-neutral-400">—</span>
+                      ) : enough ? (
+                        <span className="text-emerald-600 dark:text-emerald-400 text-xs font-medium">Enough</span>
+                      ) : (
+                        <span className="text-red-600 dark:text-red-400 text-xs font-medium">Short</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <div className={getCardClasses(theme.summary)}>
-          <p className="text-[11px] font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Expenses</p>
-          <p className="text-lg font-semibold text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(totalExpenses)}</p>
-          {isCurrentMonth && (
-            <div className="mt-1 space-y-0.5">
-              <div className="flex justify-between text-[11px]">
-                <span className="text-neutral-500 dark:text-neutral-400">Paid</span>
-                <span className="text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(paidExpenses)}</span>
-              </div>
-              <div className="flex justify-between text-[11px]">
-                <span className="text-neutral-500 dark:text-neutral-400">Remaining</span>
-                <span className="text-neutral-600 dark:text-neutral-300 tabular-nums">{formatCurrency(remainingExpenses)}</span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-neutral-200 dark:bg-neutral-700 mt-1 overflow-hidden">
-                <div className="h-full rounded-full bg-red-500" style={{ width: `${totalExpenses > 0 ? Math.min(100, (paidExpenses / totalExpenses) * 100) : 0}%` }} />
-              </div>
-            </div>
-          )}
-        </div>
+        {checkInSaving && <p className="text-xs text-neutral-400 mt-2 text-right">Saving…</p>}
       </div>
 
       {/* Calendar view: month grid (responsive for mobile and desktop) */}
@@ -463,18 +773,31 @@ export function RecurringTab({
                   <p className="text-sm text-neutral-500 dark:text-neutral-400">No events</p>
                 ) : (
                   <ul className="space-y-1.5">
-                    {dayEvents.map((e) => (
-                      <li
-                        key={e.id}
-                        className={`flex items-center justify-between gap-2 py-1.5 px-2 rounded text-sm ${calendarEventRowClass(e)}`}
-                      >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <span className={`shrink-0 rounded-full w-2.5 h-2.5 ${calendarEventDotClass(e)}`} />
-                          <span className="truncate">{displayBillName(e.name)}</span>
-                        </span>
-                        <span className="tabular-nums font-medium shrink-0">{e.type === "income" ? "+" : ""}{formatCurrency(e.amount)}</span>
-                      </li>
-                    ))}
+                    {dayEvents.map((e) => {
+                      const busy = manualPaidPendingId === e.id;
+                      return (
+                        <li
+                          key={e.id}
+                          className={`flex items-center justify-between gap-2 py-1.5 px-2 rounded text-sm ${calendarEventRowClass(e)}`}
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            <span className={`shrink-0 rounded-full w-2.5 h-2.5 ${calendarEventDotClass(e)}`} />
+                            <span className="truncate">{displayBillName(e.name)}</span>
+                          </span>
+                          <span className="flex items-center gap-2 shrink-0">
+                            <RecurringMarkPaidButton
+                              event={e}
+                              busy={busy}
+                              onToggle={() => void onMarkPaidClick(e)}
+                            />
+                            <span className="tabular-nums font-medium">
+                              {e.type === "income" ? "+" : ""}
+                              {formatCurrency(e.amount)}
+                            </span>
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -528,16 +851,26 @@ export function RecurringTab({
                         {section.outgoing.map((e) => {
                           const d = new Date(e.date + "T00:00:00");
                           const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                          const busy = manualPaidPendingId === e.id;
                           return (
                             <li key={e.id} className="flex items-center justify-between gap-2 py-1 sm:py-0.5 text-sm sm:text-xs">
                               <div className="flex items-center gap-2 sm:gap-1.5 min-w-0">
                                 <span className={`w-3 h-3 sm:w-2 sm:h-2 rounded-full shrink-0 ${e.type === "transfer" ? "bg-sky-500" : "bg-red-400"}`} />
                                 <span className="text-neutral-500 dark:text-neutral-400 shrink-0">{dateStr}</span>
-                                <span className="text-neutral-900 dark:text-neutral-100 truncate" title={e.name}>{displayBillName(e.name)}</span>
+                                <span className={`truncate ${e.isPaid ? "line-through text-neutral-500 dark:text-neutral-500" : "text-neutral-900 dark:text-neutral-100"}`} title={e.name}>
+                                  {displayBillName(e.name)}
+                                </span>
                               </div>
-                              <span className={`tabular-nums font-medium shrink-0 ${e.type === "transfer" ? "text-sky-600 dark:text-sky-400" : "text-red-600 dark:text-red-400"}`}>
-                                {formatCurrency(e.amount)}
-                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <RecurringMarkPaidButton
+                                  event={e}
+                                  busy={busy}
+                                  onToggle={() => void onMarkPaidClick(e)}
+                                />
+                                <span className={`tabular-nums font-medium ${e.type === "transfer" ? "text-sky-600 dark:text-sky-400" : "text-red-600 dark:text-red-400"}`}>
+                                  {formatCurrency(e.amount)}
+                                </span>
+                              </div>
                             </li>
                           );
                         })}
@@ -563,16 +896,28 @@ export function RecurringTab({
                     {pastEvents.map((e) => {
                       const d = new Date(e.date + "T00:00:00");
                       const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                      const busy = manualPaidPendingId === e.id;
                       return (
                         <tr key={e.id} className="border-b border-neutral-100 dark:border-neutral-800 last:border-0 opacity-60">
                           <td className="py-1.5 pr-2">
                             <div className="flex items-center gap-1.5">
                               <span className={`w-2 h-2 rounded-full shrink-0 ${e.type === "income" ? "bg-emerald-500" : e.type === "transfer" ? "bg-sky-500" : "bg-red-400"}`} />
-                              <span className="text-neutral-900 dark:text-neutral-100 truncate max-w-[160px]">{displayBillName(e.name)}</span>
+                              <span className={`truncate max-w-[160px] ${e.isPaid ? "line-through text-neutral-500" : "text-neutral-900 dark:text-neutral-100"}`}>
+                                {displayBillName(e.name)}
+                              </span>
                             </div>
                           </td>
                           <td className="py-1.5 pr-2 text-neutral-500 dark:text-neutral-500 whitespace-nowrap">{dateStr}</td>
                           <td className="py-1.5 pr-2 text-neutral-500 dark:text-neutral-500 truncate max-w-[100px]">{accountLabel(e.account)}</td>
+                          <td className="py-1.5 pr-1 text-right align-middle">
+                            <div className="inline-flex justify-end">
+                              <RecurringMarkPaidButton
+                                event={e}
+                                busy={busy}
+                                onToggle={() => void onMarkPaidClick(e)}
+                              />
+                            </div>
+                          </td>
                           <td className={`py-1.5 text-right tabular-nums font-medium whitespace-nowrap ${e.type === "income" ? "text-emerald-600/60 dark:text-emerald-400/60" : "text-red-600/60 dark:text-red-400/60"}`}>
                             {formatCurrency(e.amount)}
                           </td>
@@ -601,7 +946,7 @@ export function RecurringTab({
             { acct: "bills_account" as const, key: "billsAccount" as const },
             { acct: "spanish_fork" as const, key: "spanishFork" as const },
           ].map(({ acct, key }) => {
-            const needed = requiredThisPaycheckByAccount?.[key] ?? 0;
+            const needed = requiredThisPaycheckByAccount[key] ?? 0;
             const items = key === "checkingAccount" ? neededBreakdown.checkingAccount : key === "billsAccount" ? neededBreakdown.billsAccount : neededBreakdown.spanishFork;
             const isOpen = neededBreakdownOpen === acct;
             return (
@@ -636,6 +981,57 @@ export function RecurringTab({
           })}
         </div>
       </div>
+
+      {goalPickFor?.manualPaid && goalPickFor.manualPaid.goalCandidates.length >= 1 && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="goal-pick-title"
+        >
+          <div
+            className={
+              getCardClasses(theme.summary) +
+              " w-full max-w-sm shadow-xl p-4 space-y-3 my-auto"
+            }
+          >
+            <h3 id="goal-pick-title" className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              Which goal gets this payment?
+            </h3>
+            <p className="text-xs text-neutral-600 dark:text-neutral-400">
+              {displayBillName(goalPickFor.name)} — choose which goal should receive this payment ({formatCurrency(goalPickFor.amount)}).
+            </p>
+            <select
+              value={goalPickSelectedId}
+              onChange={(ev) => setGoalPickSelectedId(ev.target.value)}
+              className="w-full rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100"
+            >
+              {goalPickFor.manualPaid.goalCandidates.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setGoalPickFor(null)}
+                className="rounded-lg border border-neutral-300 dark:border-neutral-600 px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!goalPickSelectedId.trim() || manualPaidPendingId !== null}
+                onClick={() => void confirmGoalPick()}
+                className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                Mark paid
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

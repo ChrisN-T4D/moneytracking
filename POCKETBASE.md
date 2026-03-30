@@ -39,6 +39,18 @@ Some hosted PocketBase instances disable the admin API. If setup fails with “A
 
 ---
 
+## Field name quirks
+
+The PocketBase schema has several non-obvious field names due to how the DB was originally created. These exact names are used by all app code via `lib/pbFieldMap.ts`:
+
+- `statements.goalid` — all lowercase, not camelCase `goalId`
+- `statements.trasnferFromAccount` — typo: missing 'a' in "transfer"
+- `spanish_fork_bills.recurringPaidStatementID` — capital "ID", not "Id"
+- `paychecks.anchordate` — all lowercase, not camelCase `anchorDate`
+- `statement_tag_rules.goalId` — camelCase (different from `statements.goalid`)
+
+All code uses the `PB` object from `lib/pbFieldMap.ts` to reference these field names. Never hardcode PB field names elsewhere.
+
 ## Collections (reference)
 
 If you prefer to create collections manually in PocketBase admin, use the schema below. All text fields are type **Plain text** unless noted.
@@ -85,6 +97,10 @@ Bills and subscriptions for the bills-list sections. Each record has `account` +
 | autoTransferNote | Plain text | no   | Optional note (e.g. "Covered by monthly income transfer") |
 | account          | Plain text | yes   | `bills_account` or `checking_account` |
 | listType         | Plain text | yes   | `bills` or `subscriptions` |
+| subsection       | Plain text | no    | Groups rows in the UI. Goal routing uses bill `name` matched against `goals.category` (not subsection). Aliases like “Mark paid” goal routing (after normalization, **`Payback family`** and **`Family Payback`** are treated as the same bucket in code) |
+| recurringPaidCycle | Plain text | no  | Recurring tab manual paid cycle key (e.g. `m:2026-03`); clear with `recurringPaidGoalId` |
+| recurringPaidGoalId | Plain text | no | Goal credited for that cycle; **always set/cleared together** with `recurringPaidCycle` (app-enforced) |
+| recurringPaidStatementId | Plain text | no | Optional: PocketBase `statements` row id created when marking paid with a goal credit; cleared with cycle (add this field manually on existing DBs if PATCH fails) |
 
 ---
 
@@ -114,6 +130,9 @@ The **Spanish Fork (Rental)** section in the app reads and writes this collectio
 | inThisPaycheck | Bool       | yes      | In current paycheck? |
 | amount         | Number     | yes      | Dollar amount |
 | tenantPaid     | Bool       | no       | Whether the tenant has paid (checkbox in UI) |
+| recurringPaidCycle | Plain text | no  | Same as `bills` (Recurring tab) |
+| recurringPaidGoalId | Plain text | no | Same as `bills`; clear with cycle |
+| recurringPaidStatementId | Plain text | no | Same as `bills` (optional; add on existing DBs if needed) |
 
 ---
 
@@ -185,7 +204,9 @@ Current savings / payoff goals shown on the main page.
 | targetAmount | Number     | yes      | Total target amount |
 | currentAmount| Number     | yes      | Current progress amount |
 | targetDate   | Plain text | no       | Optional target date (e.g. `2026-12-31`) |
-| category     | Plain text | no       | e.g. `Savings`, `Debt`, etc. |
+| category     | Plain text | no       | e.g. `Savings`, or **same text as bill `name`** (e.g. `Payback family`) for Check-In Mark paid routing |
+
+**Progress display:** `currentAmount` in PocketBase is **rolled up with** statement-tagged amounts: shown total = **tags sum + `currentAmount`**. Recurring “Mark paid” bumps **`currentAmount`** (same field you already use for goal progress).
 
 You can maintain these directly in PocketBase (`goals` collection) or later add UI for editing.
 

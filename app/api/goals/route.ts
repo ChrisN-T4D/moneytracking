@@ -1,7 +1,27 @@
 import { NextResponse } from "next/server";
 import { getTokenFromCookie, getPbBase, hasPbAuth } from "@/lib/pocketbase-auth";
+import { getAdminToken } from "@/lib/pocketbase-setup";
 
 export const dynamic = "force-dynamic";
+
+async function resolveAuth() {
+  const base = getPbBase();
+  if (!base) return { token: null as string | null, apiBase: "" };
+  let token: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
+  let apiBase = base;
+  if (!token) {
+    const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+    const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+    if (email && password) {
+      try {
+        const r = await getAdminToken(base, email, password);
+        token = r.token;
+        apiBase = r.baseUrl;
+      } catch { /* */ }
+    }
+  }
+  return { token, apiBase };
+}
 
 /** Create a new money goal. Body: { name, targetAmount, currentAmount?, targetDate?, category? }. */
 export async function POST(request: Request) {
@@ -11,14 +31,13 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  const token = await getTokenFromCookie();
+  const { token, apiBase: base } = await resolveAuth();
   if (!token) {
     return NextResponse.json(
       { ok: false, message: "Not authenticated." },
       { status: 401 }
     );
   }
-  const base = getPbBase();
   try {
     const body = (await request.json()) as {
       name?: string;
@@ -94,14 +113,13 @@ export async function DELETE(request: Request) {
       { status: 400 }
     );
   }
-  const token = await getTokenFromCookie();
+  const { token, apiBase: base } = await resolveAuth();
   if (!token) {
     return NextResponse.json(
       { ok: false, message: "Not authenticated." },
       { status: 401 }
     );
   }
-  const base = getPbBase();
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
   if (!id) {

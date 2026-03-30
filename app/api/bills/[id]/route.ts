@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTokenFromCookie, getPbBase } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
+import { isPbRecordId } from "@/lib/pbFieldMap";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,12 @@ type BillUpdateBody = {
   inThisPaycheck?: boolean;
   autoTransferNote?: string | null;
   subsection?: string | null;
+  /** Recurring tab manual cycle marker (e.g. m:2026-03, b:2026-03-15, y:2026); null clears. */
+  recurringPaidCycle?: string | null;
+  /** Goal credited for this cycle (clear together with recurringPaidCycle). */
+  recurringPaidGoalId?: string | null;
+  /** Statement row id for Recurring mark paid (clear with cycle). */
+  recurringPaidStatementId?: string | null;
 };
 
 const allowedFrequencies = ["2weeks", "monthly", "yearly"] as const;
@@ -30,7 +37,7 @@ export async function PATCH(
   }
 
   const { id } = await params;
-  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+  if (!id || !isPbRecordId(id)) {
     return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
   }
 
@@ -72,6 +79,21 @@ export async function PATCH(
   }
   if (body.subsection !== undefined) {
     payload.subsection = body.subsection === null || body.subsection === "" ? null : String(body.subsection).trim();
+  }
+  if (body.recurringPaidCycle !== undefined) {
+    const v = body.recurringPaidCycle;
+    payload.recurringPaidCycle =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
+  if (body.recurringPaidGoalId !== undefined) {
+    const v = body.recurringPaidGoalId;
+    payload.recurringPaidGoalId =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
+  if (body.recurringPaidStatementId !== undefined) {
+    const v = body.recurringPaidStatementId;
+    payload.recurringPaidStatementId =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
   }
 
   if (Object.keys(payload).length === 0) {
@@ -115,6 +137,8 @@ export async function PATCH(
   }
 
   const data = (await res.json()) as Record<string, unknown>;
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/");
   return NextResponse.json({ ok: true, record: data });
 }
 
@@ -132,7 +156,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+  if (!id || !isPbRecordId(id)) {
     return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
   }
 

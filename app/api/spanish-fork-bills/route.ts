@@ -1,24 +1,19 @@
 import { NextResponse } from "next/server";
-import { getPbBase, getTokenFromCookie } from "@/lib/pocketbase-auth";
-import { isSyntheticBillSubsectionKey } from "@/lib/pocketbase";
+import { getTokenFromCookie, getPbBase } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
 
 export const dynamic = "force-dynamic";
 
-type BillCreateBody = {
+type SpanishForkBillCreateBody = {
   name: string;
   frequency?: string;
   nextDue?: string;
   amount?: number;
-  account?: string;
-  listType?: string;
-  autoTransferNote?: string | null;
-  subsection?: string | null;
 };
 
 const allowedFrequencies = ["2weeks", "monthly", "yearly"] as const;
 
-/** POST /api/bills — create a new bill/subscription record in PocketBase. */
+/** POST /api/spanish-fork-bills — create a Spanish Fork bill in PocketBase. */
 export async function POST(request: Request) {
   const base = getPbBase();
   if (!base) {
@@ -28,9 +23,9 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: BillCreateBody;
+  let body: SpanishForkBillCreateBody;
   try {
-    body = (await request.json()) as BillCreateBody;
+    body = (await request.json()) as SpanishForkBillCreateBody;
   } catch {
     return NextResponse.json({ ok: false, message: "Invalid JSON body." }, { status: 400 });
   }
@@ -40,13 +35,12 @@ export async function POST(request: Request) {
   }
 
   const freq = body.frequency ?? "monthly";
-  if (!allowedFrequencies.includes(freq as typeof allowedFrequencies[number])) {
+  if (!allowedFrequencies.includes(freq as (typeof allowedFrequencies)[number])) {
     return NextResponse.json({ ok: false, message: `Invalid frequency: ${freq}` }, { status: 400 });
   }
 
   let authToken: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
-  let apiBase = base.replace(/\/$/, "");
-
+  let apiBase = base;
   if (!authToken) {
     const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
     const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
@@ -54,39 +48,29 @@ export async function POST(request: Request) {
       try {
         const result = await getAdminToken(base, email, password);
         authToken = result.token;
-        apiBase = result.baseUrl.replace(/\/$/, "");
+        apiBase = result.baseUrl;
       } catch {
-        // fall through
+        // continue
       }
     }
   }
-
   if (!authToken) {
     return NextResponse.json(
-      { ok: false, message: "Sign in or set PocketBase admin credentials to create bills." },
+      { ok: false, message: "Not authenticated. Sign in or set PocketBase admin credentials." },
       { status: 401 }
     );
   }
 
-  const payload: Record<string, unknown> = {
+  const payload = {
     name: body.name.trim(),
     frequency: freq,
-    nextDue: body.nextDue ?? "",
-    amount: body.amount ?? 0,
-    account: body.account ?? "checking_account",
-    listType: body.listType ?? "bills",
+    nextDue: (body.nextDue ?? "").trim(),
+    amount: Number(body.amount) || 0,
+    inThisPaycheck: false,
+    tenantPaid: false,
   };
-  if (body.autoTransferNote !== undefined) payload.autoTransferNote = body.autoTransferNote;
-  if (body.subsection !== undefined) {
-    const raw =
-      body.subsection === null || body.subsection === ""
-        ? null
-        : String(body.subsection).trim();
-    payload.subsection =
-      raw && !isSyntheticBillSubsectionKey(raw) ? raw : null;
-  }
 
-  const url = `${apiBase}/api/collections/bills/records`;
+  const url = `${apiBase.replace(/\/$/, "")}/api/collections/spanish_fork_bills/records`;
   const res = await fetch(url, {
     method: "POST",
     headers: {

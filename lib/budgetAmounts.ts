@@ -21,6 +21,9 @@ function normalizeNameForLookup(name: string): string {
 export const BILLS_AMOUNTS: Record<string, number> = {
   // Bills account - bills
   [n("bills_account|bills|tithing")]: 632.42,
+  [n("bills_account|bills|oklahoma mortgage")]: 1886.96,
+  /** Legacy bill names — rename PocketBase rows to "Oklahoma Mortgage" when you can */
+  [n("bills_account|bills|oklahoma mortgage (freedom)")]: 1886.96,
   [n("bills_account|bills|mortgage")]: 1886.96,
   [n("bills_account|bills|oklahoma natural gas")]: 140,
   [n("bills_account|bills|state farm auto insurance")]: 241,
@@ -58,6 +61,8 @@ export const BILLS_AMOUNTS: Record<string, number> = {
 
 /** Spanish Fork bills: key = normalized name, value = amount */
 export const SPANISH_FORK_AMOUNTS: Record<string, number> = {
+  [n("spanish fork mortgage")]: 2024,
+  /** @deprecated Rows still named "Mortgage" — rename to Spanish Fork Mortgage when you can */
   [n("mortgage")]: 2024,
   [n("spanish fork city utilities")]: 150,
   [n("state farm home insurance (escrow)")]: 0,

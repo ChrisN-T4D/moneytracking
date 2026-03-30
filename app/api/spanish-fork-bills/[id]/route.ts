@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTokenFromCookie, getPbBase } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
+import { isPbRecordId, PB } from "@/lib/pbFieldMap";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,9 @@ type SpanishForkBillUpdateBody = {
   name?: string;
   nextDue?: string;
   frequency?: string;
+  recurringPaidCycle?: string | null;
+  recurringPaidGoalId?: string | null;
+  recurringPaidStatementID?: string | null;
 };
 
 /** PATCH /api/spanish-fork-bills/[id] — update a Spanish Fork bill record. */
@@ -26,7 +30,7 @@ export async function PATCH(
   }
 
   const { id } = await params;
-  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+  if (!id || !isPbRecordId(id)) {
     return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
   }
 
@@ -59,6 +63,21 @@ export async function PATCH(
   }
   if (body.nextDue !== undefined) payload.nextDue = String(body.nextDue ?? "").trim();
   if (body.frequency !== undefined) payload.frequency = String(body.frequency ?? "").trim();
+  if (body.recurringPaidCycle !== undefined) {
+    const v = body.recurringPaidCycle;
+    payload.recurringPaidCycle =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
+  if (body.recurringPaidGoalId !== undefined) {
+    const v = body.recurringPaidGoalId;
+    payload.recurringPaidGoalId =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
+  if (body.recurringPaidStatementID !== undefined) {
+    const v = body.recurringPaidStatementID;
+    payload[PB.spanishForkBills.paidStatementId] =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
 
   if (Object.keys(payload).length === 0) {
     return NextResponse.json({ ok: false, message: "No valid fields to update." }, { status: 400 });
@@ -102,6 +121,8 @@ export async function PATCH(
   }
 
   const data = (await res.json()) as Record<string, unknown>;
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/");
   return NextResponse.json({ ok: true, record: data });
 }
 
@@ -119,7 +140,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+  if (!id || !isPbRecordId(id)) {
     return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
   }
 

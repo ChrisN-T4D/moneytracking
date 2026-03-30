@@ -384,7 +384,9 @@ export function suggestAutoTransfersFromStatements(statements: StatementRecord[]
 /** Normalize withdrawal description to a bill name for grouping. */
 export function billNameFromDescription(description: string | null | undefined): string {
   const s = String(description ?? "").trim();
-  if (/\bFreedom\s*Mtg|Freedom\s*Mtg/i.test(s)) return "Freedom Mortgage";
+  // Rocket = Oklahoma home; Freedom = Spanish Fork rental (per user).
+  if (/\bRocket\s*Mtg\b|\bRocket\s*Mortgage\b|\bRocket\.com\b/i.test(s)) return "Oklahoma Mortgage";
+  if (/\bFreedom\s*Mtg/i.test(s)) return "Spanish Fork Mortgage";
   if (/\bState\s*Farm/i.test(s)) return "State Farm";
   if (/\bDominion\s*Energy/i.test(s)) return "Dominion Energy";
   if (/\bProg\s*Preferred|Progressive/i.test(s)) return "Progressive Insurance";

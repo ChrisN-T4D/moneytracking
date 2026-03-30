@@ -452,6 +452,30 @@ function getPaycheckDatesInMonth(
   return result;
 }
 
+/** Pay dates in the previous, current, and next calendar months (for biweekly window lookup). */
+export function allPayDatesNearMonth(
+  configs: PaycheckConfig[],
+  year: number,
+  month: number
+): { date: Date; amount: number; name: string }[] {
+  const triple: { y: number; m: number }[] =
+    month === 0
+      ? [{ y: year - 1, m: 11 }, { y: year, m: 0 }, { y: year, m: 1 }]
+      : month === 11
+        ? [{ y: year, m: 10 }, { y: year, m: 11 }, { y: year + 1, m: 0 }]
+        : [{ y: year, m: month - 1 }, { y: year, m: month }, { y: year, m: month + 1 }];
+
+  const payDates: { date: Date; amount: number; name: string }[] = [];
+  for (const { y, m } of triple) {
+    for (const c of configs) {
+      const dates = getPaycheckDatesInMonth([c], y, m);
+      for (const d of dates) payDates.push({ ...d, name: c.name ?? "" });
+    }
+  }
+  payDates.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return payDates;
+}
+
 /** Total expected paychecks this month and their dates. */
 export function expectedPaychecksThisMonthDetail(
   configs: PaycheckConfig[],
@@ -466,14 +490,6 @@ export function expectedPaychecksThisMonthDetail(
   }
   payDates.sort((a, b) => a.date.getTime() - b.date.getTime());
   return { total: payDates.reduce((s, p) => s + p.amount, 0), payDates };
-}
-
-/** Total expected paychecks this month from config amounts (does not use statement actuals). */
-export function expectedPaychecksThisMonth(
-  configs: PaycheckConfig[],
-  refDate: Date = new Date()
-): number {
-  return expectedPaychecksThisMonthDetail(configs, refDate).total;
 }
 
 export interface MoneyStatus {

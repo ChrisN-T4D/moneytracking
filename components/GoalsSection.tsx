@@ -216,7 +216,11 @@ export function GoalsSection() {
             onChange={(e) => setCategory(e.target.value)}
             placeholder="Savings"
             className="mt-1 w-full rounded-lg border border-neutral-300 bg-white px-2 py-1.5 text-xs text-neutral-900 placeholder:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+            title="Match a bill subsection (e.g. Payback family) to route Recurring “Mark paid” to goals with the same category."
           />
+          <p className="mt-0.5 text-[10px] text-neutral-500 dark:text-neutral-500 max-w-[9rem] leading-tight">
+            Same text as bill subsection links Mark paid to goals.
+          </p>
         </div>
         <button
           type="submit"

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTokenFromCookie, getPbBase, getUserIdFromToken } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
+import { isPbRecordId, PB } from "@/lib/pbFieldMap";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,7 @@ export async function PATCH(
   if (!id) {
     return NextResponse.json({ ok: false, message: "Missing paycheck id." }, { status: 400 });
   }
-  if (!/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+  if (!isPbRecordId(id)) {
     return NextResponse.json({ ok: false, message: "Invalid paycheck id." }, { status: 400 });
   }
 
@@ -61,26 +62,7 @@ export async function PATCH(
     return NextResponse.json({ ok: false, message: "Invalid JSON body." }, { status: 400 });
   }
 
-  // Fetch the existing record first to discover actual PocketBase field names
-  // (PocketBase may use camelCase or snake_case depending on how the collection was created)
-  const existingRes = await fetch(`${resolvedBase}/api/collections/paychecks/records/${id}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  if (!existingRes.ok) {
-    const text = await existingRes.text();
-    return NextResponse.json({ ok: false, message: `Could not fetch record: ${existingRes.status} ${text}` }, { status: 502 });
-  }
-  const existing = (await existingRes.json()) as Record<string, unknown>;
-
-  // Helper: pick the first field key that actually exists in the record
-  function fieldKey(...candidates: string[]): string {
-    for (const c of candidates) {
-      if (c in existing) return c;
-    }
-    return candidates[0];
-  }
-
+  const P = PB.paychecks;
   const allowedFrequencies = ["biweekly", "monthly", "monthlyLastWorkingDay"] as const;
   const payload: Record<string, unknown> = {};
 
@@ -91,54 +73,31 @@ export async function PATCH(
     payload.frequency = body.frequency;
   }
   if (body.anchorDate !== undefined) {
-    const key = fieldKey("anchordate", "anchorDate", "anchor_date");
     const v = body.anchorDate;
-    if (v === null || v === "") payload[key] = null;
-    else if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/.test(v.trim())) payload[key] = v.trim();
+    if (v === null || v === "") payload[P.anchorDate] = null;
+    else if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/.test(v.trim())) payload[P.anchorDate] = v.trim();
   }
   if (body.dayOfMonth !== undefined) {
-    const key = fieldKey("dayOfMonth", "day_of_month");
     const n = body.dayOfMonth === null ? null : Number(body.dayOfMonth);
-    if (n === null || (Number.isInteger(n) && n >= 1 && n <= 31)) payload[key] = n;
+    if (n === null || (Number.isInteger(n) && n >= 1 && n <= 31)) payload[P.dayOfMonth] = n;
   }
   if (body.amount !== undefined) {
     const n = body.amount === null ? null : Number(body.amount);
     if (n === null || (typeof n === "number" && !Number.isNaN(n))) payload.amount = n;
   }
   if (body.paidThisMonthYearMonth !== undefined) {
-    const key = fieldKey("paidThisMonthYearMonth", "paid_this_month_year_month");
     const v = body.paidThisMonthYearMonth;
-    if (v === null || v === "") payload[key] = null;
-    else if (typeof v === "string" && /^\d{4}-\d{2}$/.test(v.trim())) payload[key] = v.trim();
+    if (v === null || v === "") payload[P.paidThisMonthYearMonth] = null;
+    else if (typeof v === "string" && /^\d{4}-\d{2}$/.test(v.trim())) payload[P.paidThisMonthYearMonth] = v.trim();
   }
   if (body.amountPaidThisMonth !== undefined) {
-    const key = fieldKey("amountPaidThisMonth", "amount_paid_this_month");
     const n = body.amountPaidThisMonth === null ? null : Number(body.amountPaidThisMonth);
-    if (n === null || (typeof n === "number" && !Number.isNaN(n))) payload[key] = n;
+    if (n === null || (typeof n === "number" && !Number.isNaN(n))) payload[P.amountPaidThisMonth] = n;
   }
   if (body.fundingMonthPreference !== undefined) {
-    const key = fieldKey("fundingMonthPreference", "funding_month_preference");
     const v = body.fundingMonthPreference;
-    if (v === null || v === "" || (typeof v === "string" && v.trim() === "")) payload[key] = null;
-    else if (v === "same_month" || v === "next_month" || v === "split") payload[key] = v;
-  }
-
-  // Audit fields
-  const userId = getUserIdFromToken(token);
-  payload[fieldKey("lastEditedAt", "last_edited_at")] = new Date().toISOString();
-  if (userId) {
-    payload[fieldKey("lastEditedByUserId", "last_edited_by_user_id")] = userId;
-    try {
-      const userRes = await fetch(`${resolvedBase}/api/collections/users/records/${userId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
-      if (userRes.ok) {
-        const user = (await userRes.json()) as { name?: string; email?: string };
-        const displayName = (user.name ?? user.email ?? userId).trim() || userId;
-        payload[fieldKey("lastEditedBy", "last_edited_by")] = displayName;
-      }
-    } catch { /* ignore — audit fields are optional */ }
+    if (v === null || v === "" || (typeof v === "string" && v.trim() === "")) payload.fundingMonthPreference = null;
+    else if (v === "same_month" || v === "next_month" || v === "split") payload.fundingMonthPreference = v;
   }
 
   if (Object.keys(payload).length === 0) {
@@ -184,7 +143,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  if (!id || !/^[a-zA-Z0-9_-]{1,21}$/.test(id)) {
+  if (!id || !isPbRecordId(id)) {
     return NextResponse.json({ ok: false, message: "Invalid paycheck id." }, { status: 400 });
   }
   if (id.startsWith("default-")) {
