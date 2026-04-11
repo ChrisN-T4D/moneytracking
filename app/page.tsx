@@ -9,6 +9,7 @@ import { AuthenticatedContent } from "@/components/AuthenticatedContent";
 import { DraggableSectionCards } from "@/components/DraggableSectionCards";
 import { RecurringTab } from "@/components/RecurringTab";
 import { TabLayout } from "@/components/TabLayout";
+import { PbRealtimeRefresh } from "@/components/PbRealtimeRefresh";
 import { PaycheckManagement } from "@/components/PaycheckManagement";
 import {
   initialSummary,
@@ -46,6 +47,9 @@ import {
   autoTransferredInForMonth,
   requiredThisPaycheckByAccountFromBills,
   requiredForPayPeriodEnd,
+  allPayDatesNearMonth,
+  allPayDatesWithinMonthRadius,
+  billIncludedForNeededBeforePaycheck,
   getDisplayMonthDetail,
   expectedPaychecksThisMonthDetail,
   computeMoneyStatus,
@@ -55,8 +59,8 @@ import {
   type MoneyStatusWithExtras,
   type MoneyStatusExtras,
 } from "@/lib/summaryCalculations";
-import { getNextDueAndPaycheck, getTodayUTC } from "@/lib/paycheckDates";
-import { getNextBiweeklyPayDate } from "@/lib/paycheckConfig";
+import { formatDateToYYYYMMDD, getNextPaydayFromSchedule, getNextDueAndPaycheck, getTodayUTC } from "@/lib/paycheckDates";
+import { defaultPaycheckConfigs, getNextBiweeklyPayDate } from "@/lib/paycheckConfig";
 
 export const dynamic = "force-dynamic";
 
@@ -110,20 +114,28 @@ export default async function Home() {
 
   const paycheckConfigs = await getPaychecks();
   const ref = getTodayUTC();
-  const _rawBiweeklyEnd = getNextBiweeklyPayDate(paycheckConfigs, ref);
   // If today IS the pay day, the cycle we need to budget for is today→today+14.
   // Advance by 14 so bills due in the new cycle (today through next pay date) show as "in this paycheck".
   const biweeklyEnd = (() => {
-    if (!_rawBiweeklyEnd) return undefined;
+    const raw = getNextBiweeklyPayDate(paycheckConfigs, ref);
+    if (!raw) return undefined;
     const refMs = ref.getFullYear() * 10000 + (ref.getMonth() + 1) * 100 + ref.getDate();
-    const endMs = _rawBiweeklyEnd.getFullYear() * 10000 + (_rawBiweeklyEnd.getMonth() + 1) * 100 + _rawBiweeklyEnd.getDate();
+    const endMs = raw.getFullYear() * 10000 + (raw.getMonth() + 1) * 100 + raw.getDate();
     if (endMs === refMs) {
-      const d = new Date(_rawBiweeklyEnd);
+      const d = new Date(raw);
       d.setDate(d.getDate() + 14);
       return d;
     }
-    return _rawBiweeklyEnd;
+    return raw;
   })();
+
+  const configsForSchedule = paycheckConfigs.length > 0 ? paycheckConfigs : defaultPaycheckConfigs;
+  const payPeriodEndDates = allPayDatesNearMonth(configsForSchedule, today.getFullYear(), today.getMonth()).map((p) => p.date);
+  const nextPayday = getNextPaydayFromSchedule(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+    allPayDatesWithinMonthRadius(configsForSchedule, today.getFullYear(), today.getMonth(), 2)
+  );
+  const nextPaydayYmd = nextPayday ? formatDateToYYYYMMDD(nextPayday) : null;
 
   const displayDetail = getDisplayMonthDetail(paycheckConfigs, today);
   const { displayMonth, displayMonthName, displayNextMonth, nextMonthName, payDates, paychecksThisMonth, paychecksDisplayNextMonth } =
@@ -142,9 +154,9 @@ export default async function Home() {
     hasPb
       ? await Promise.all([
           getSections(),
-          getBillsWithMeta(biweeklyEnd),
+          getBillsWithMeta(biweeklyEnd, payPeriodEndDates),
           getAutoTransfers(),
-          getSpanishForkBills(biweeklyEnd),
+          getSpanishForkBills(biweeklyEnd, payPeriodEndDates),
           getSummary(),
           getStatements({ perPage: 1000, sort: "-date" }),
           getStatementTagRules(),
@@ -219,7 +231,9 @@ export default async function Home() {
     }
   }
 
-  const baseGoals = hasPb && goalsPb.length > 0 ? goalsPb : staticGoals;
+  // When PB is configured, always use its goals list (even if empty). Falling back to staticGoals
+  // when fetch returned [] hid real goals after errors and showed seed goals instead.
+  const baseGoals = hasPb ? goalsPb : staticGoals;
   const goals = baseGoals.map((g) => {
     const taggedTotal = goalProgressById.get(g.id) ?? 0;
     const pbAmount = Number(g.currentAmount) || 0;
@@ -381,7 +395,11 @@ export default async function Home() {
         ...resolvedCheckingAccountBills.map((b) => ({ ...b, account: "checking_account" as const })),
         ...resolvedCheckingAccountSubs.map((b) => ({ ...b, account: "checking_account" as const })),
       ];
-  const requiredThisPaycheckByAccount = requiredThisPaycheckByAccountFromBills(billsWithAccountForPaycheck, hasPb ? spanishForkPb : resolvedSpanishForkBills);
+  const requiredThisPaycheckByAccount = requiredThisPaycheckByAccountFromBills(
+    billsWithAccountForPaycheck,
+    hasPb ? spanishForkPb : resolvedSpanishForkBills,
+    nextPaydayYmd
+  );
   // Actual paid last month by account (from tagged statements)
   const paidLastMonthByAccount = { bills: 0, checking: 0, spanishFork: 0 };
   if (hasPb && statements.length > 0 && tagRules.length > 0) {
@@ -421,7 +439,7 @@ export default async function Home() {
   // Upcoming bills (in this paycheck) for chart display
   const upcomingBills: { date: string; name: string; amount: number; account?: string }[] = [];
   for (const b of billsWithAccountForPaycheck) {
-    if (!b.inThisPaycheck || !b.nextDue) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd) || !b.nextDue) continue;
     upcomingBills.push({
       date: b.nextDue,
       name: (b as { name?: string }).name ?? "Bill",
@@ -430,7 +448,7 @@ export default async function Home() {
     });
   }
   for (const b of (hasPb ? spanishForkPb : resolvedSpanishForkBills)) {
-    if (!b.inThisPaycheck || !b.nextDue) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd) || !b.nextDue) continue;
     upcomingBills.push({
       date: b.nextDue,
       name: (b as { name?: string }).name ?? "SF",
@@ -443,7 +461,12 @@ export default async function Home() {
   // Per-paycheck breakdown for display month (Income vs Needed chart)
   const spanishForkForPeriod = hasPb ? spanishForkPb : resolvedSpanishForkBills;
   const requiredByPayDate = payDates.map((p) =>
-    requiredForPayPeriodEnd(billsWithAccountForPaycheck, spanishForkForPeriod, p.date)
+    requiredForPayPeriodEnd(
+      billsWithAccountForPaycheck,
+      spanishForkForPeriod,
+      p.date,
+      payPeriodEndDates
+    )
   );
   const goalSharePerPaycheck = payDates.length > 0 ? totalGoalContributions / payDates.length : totalGoalContributions;
   const discretionaryByPayDate = payDates.map((p, i) =>
@@ -542,6 +565,7 @@ export default async function Home() {
           goals={goals}
           goalStatementsById={goalStatementsById}
           usePb={usePb}
+          nextPaydayYmd={nextPaydayYmd}
           sectionsToRender={sectionsToRender}
           billsWithMeta={billsWithMeta}
           spanishForkPb={spanishForkPb}
@@ -576,6 +600,7 @@ function MainContent({
   goals,
   goalStatementsById,
   usePb: _usePb,
+  nextPaydayYmd,
   sectionsToRender,
   billsWithMeta,
   spanishForkPb,
@@ -605,6 +630,7 @@ function MainContent({
   goals: MoneyGoal[];
   goalStatementsById: Map<string, Array<{ id: string; date: string; description: string; amount: number }>>;
   usePb: boolean;
+  nextPaydayYmd: string | null;
   sectionsToRender: Section[];
   billsWithMeta: BillOrSubWithMeta[];
   spanishForkPb: SpanishForkBill[];
@@ -654,11 +680,13 @@ function MainContent({
 
       <div className="relative z-10 pl-4 pr-safe pt-4 pb-4 space-y-6 max-w-2xl mx-auto">
         <GoalsProvider initialGoals={goals} goalStatementsById={goalStatementsById}>
+          {hasPb && <PbRealtimeRefresh />}
           <TabLayout
             checkinContent={
               <RecurringTab
                 paycheckConfigs={paycheckConfigs}
                 billsWithMeta={billsWithMeta}
+                nextPaydayYmd={nextPaydayYmd}
                 spanishForkBills={hasPb ? spanishForkPb : spanishForkBills}
                 autoTransfers={hasPb ? autoTransfersPb : autoTransfers}
                 goals={goals}

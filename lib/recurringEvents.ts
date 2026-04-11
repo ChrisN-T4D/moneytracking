@@ -159,7 +159,7 @@ export function buildRecurringEvents(
       const members = membersByGroupKey.get(groupKey) ?? [];
       const dates = billDatesInMonth(item, year, month);
       const isSynthetic = isSyntheticBillSubsectionKey(groupKey);
-      const candidates = isSynthetic ? [] : goalsForBillName(goals, item.name);
+      const candidates = isSynthetic ? [] : goalsForBillName(goals, item.name, groupKey);
       const requireGoalIds = candidates.length > 0;
       const membersForCredit = members.map((m) => ({
         name: m.name,

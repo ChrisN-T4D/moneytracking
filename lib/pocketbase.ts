@@ -181,7 +181,11 @@ function parseFrequency(s: string | undefined): Frequency {
   return "monthly";
 }
 
-function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
+function parseBill(
+  item: PbBill,
+  paycheckEndDate?: Date | null,
+  payPeriodEndDates?: Date[] | null
+): BillOrSub {
   const ref = getTodayUTC();
   const rawNextDue = (item.nextDue ?? "").trim();
   const recurringPaid = (item.recurringPaidCycle ?? "").trim() || null;
@@ -206,7 +210,11 @@ function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
     rawNextDue,
     item.frequency ?? "monthly",
     ref,
-    paycheckEndDate
+    paycheckEndDate,
+    {
+      recurringPaidCycle: recurringPaid,
+      payPeriodEndDates: payPeriodEndDates ?? undefined,
+    }
   );
   return {
     id: item.id,
@@ -227,7 +235,10 @@ function parseBill(item: PbBill, paycheckEndDate?: Date | null): BillOrSub {
 export type BillOrSubWithMeta = BillOrSub & { account?: string; listType?: string; subsection?: string | null };
 
 /** Fetch all bills/subscriptions from PocketBase (with account/listType for section filtering). */
-export async function getBillsWithMeta(paycheckEndDate?: Date | null): Promise<BillOrSubWithMeta[]> {
+export async function getBillsWithMeta(
+  paycheckEndDate?: Date | null,
+  payPeriodEndDates?: Date[] | null
+): Promise<BillOrSubWithMeta[]> {
   if (!POCKETBASE_URL) return [];
   const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
   const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
@@ -235,7 +246,7 @@ export async function getBillsWithMeta(paycheckEndDate?: Date | null): Promise<B
 
   function mapItems(items: PbBill[]): BillOrSubWithMeta[] {
     return (items ?? []).map((item) => {
-      const b = parseBill(item, paycheckEndDate);
+      const b = parseBill(item, paycheckEndDate, payPeriodEndDates);
       return {
         ...b,
         account: item.account,
@@ -417,7 +428,10 @@ interface PbSpanishForkBill {
 }
 
 /** Fetch Spanish Fork bills from PocketBase. Returns [] if URL not set or request fails. */
-export async function getSpanishForkBills(paycheckEndDate?: Date | null): Promise<SpanishForkBill[]> {
+export async function getSpanishForkBills(
+  paycheckEndDate?: Date | null,
+  payPeriodEndDates?: Date[] | null
+): Promise<SpanishForkBill[]> {
   if (!POCKETBASE_URL) return [];
   try {
     // Use admin auth so all records are returned regardless of collection rules
@@ -441,11 +455,16 @@ export async function getSpanishForkBills(paycheckEndDate?: Date | null): Promis
     const data = (await res.json()) as PbListResponse<PbSpanishForkBill>;
     const ref = getTodayUTC();
     return (data.items ?? []).map((item) => {
+      const recurringPaid = (item.recurringPaidCycle ?? "").trim() || null;
       const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
         item.nextDue ?? "",
         item.frequency ?? "monthly",
         ref,
-        paycheckEndDate
+        paycheckEndDate,
+        {
+          recurringPaidCycle: recurringPaid,
+          payPeriodEndDates: payPeriodEndDates ?? undefined,
+        }
       );
       return {
         id: item.id,
@@ -455,7 +474,7 @@ export async function getSpanishForkBills(paycheckEndDate?: Date | null): Promis
         inThisPaycheck,
         amount: Number(item.amount) || 0,
         tenantPaid: Boolean(item.tenantPaid),
-        recurringPaidCycle: (item.recurringPaidCycle ?? "").trim() || null,
+        recurringPaidCycle: recurringPaid,
         recurringPaidGoalId: (item.recurringPaidGoalId ?? "").trim() || null,
         recurringPaidStatementId: (item.recurringPaidStatementID ?? "").trim() || null,
       };
@@ -553,23 +572,46 @@ interface PbGoal {
   monthlyContribution?: number | null;
 }
 
+function mapGoalRecords(items: PbGoal[]): MoneyGoal[] {
+  return (items ?? []).map((item) => ({
+    id: item.id,
+    name: item.name ?? "",
+    targetAmount: Number(item.targetAmount) || 0,
+    currentAmount: Number(item.currentAmount) || 0,
+    targetDate: item.targetDate ?? null,
+    category: item.category ?? null,
+    monthlyContribution: item.monthlyContribution != null ? Number(item.monthlyContribution) : null,
+  }));
+}
+
 /** Fetch money goals from PocketBase. Returns [] if URL not set or request fails. */
 export async function getGoals(): Promise<MoneyGoal[]> {
   if (!POCKETBASE_URL) return [];
+  const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  const adminApiBase = POCKETBASE_API_URL || BASE;
+
   try {
+    if (adminApiBase && adminEmail && adminPassword) {
+      try {
+        const { token, baseUrl } = await getAdminToken(adminApiBase, adminEmail, adminPassword);
+        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/collections/goals/records?perPage=200`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = (await res.json()) as PbListResponse<PbGoal>;
+          return mapGoalRecords(data.items ?? []);
+        }
+      } catch {
+        /* fall through */
+      }
+    }
     // no-store so monthly contribution edits reflect immediately on router.refresh()
     const res = await fetch(`${BASE}/api/collections/goals/records?perPage=200`, { cache: "no-store" });
     if (!res.ok) return [];
     const data = (await res.json()) as PbListResponse<PbGoal>;
-    return (data.items ?? []).map((item) => ({
-      id: item.id,
-      name: item.name ?? "",
-      targetAmount: Number(item.targetAmount) || 0,
-      currentAmount: Number(item.currentAmount) || 0,
-      targetDate: item.targetDate ?? null,
-      category: item.category ?? null,
-      monthlyContribution: item.monthlyContribution != null ? Number(item.monthlyContribution) : null,
-    }));
+    return mapGoalRecords(data.items ?? []);
   } catch {
     return [];
   }

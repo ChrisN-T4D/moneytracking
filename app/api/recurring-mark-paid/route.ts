@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getTokenFromCookie, getPbBase } from "@/lib/pocketbase-auth";
 import { getAdminToken } from "@/lib/pocketbase-setup";
 import { syncGoalFromStatements } from "@/lib/recalculateGoalFromStatements";
+import { advanceNextDueAfterPaidOccurrence } from "@/lib/paycheckDates";
 import { PB, isPbRecordId } from "@/lib/pbFieldMap";
 
 export const dynamic = "force-dynamic";
@@ -110,6 +111,8 @@ export async function POST(request: Request) {
     }
     const lineLabel = String(b.lineLabel ?? "Bill").trim() || "Bill";
     const fields = paidFields(col);
+    const nextDuePbKey = col === "bills" ? PB.bills.nextDue : PB.spanishForkBills.nextDue;
+    const collectionApi = col === "bills" ? "bills" : "spanish_fork_bills";
 
     // 1. Create statement row (with goalid linked) if there's a goal + credit
     let statementId: string | null = null;
@@ -150,18 +153,32 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2. PATCH each bill with cycle / goal / statement id
+    // 2. PATCH each bill: cycle / goal / statement id, and advance nextDue to the following occurrence
     for (const id of ids) {
+      const getRes = await fetch(
+        `${base}/api/collections/${collectionApi}/records/${id}`,
+        { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
+      );
+      let advancedNextDue: string | null = null;
+      if (getRes.ok) {
+        const rec = (await getRes.json()) as Record<string, unknown>;
+        const freq = String(rec.frequency ?? "monthly");
+        advancedNextDue = advanceNextDueAfterPaidOccurrence(freq, dateYmd);
+      }
+
+      const patchBody: Record<string, unknown> = {
+        [fields.paidCycle]: cycleKey,
+        [fields.paidGoalId]: goalId,
+        [fields.paidStatementId]: statementId,
+      };
+      if (advancedNextDue) patchBody[nextDuePbKey] = advancedNextDue;
+
       const patchRes = await fetch(
-        `${base}/api/collections/${col}/records/${id}`,
+        `${base}/api/collections/${collectionApi}/records/${id}`,
         {
           method: "PATCH",
           headers: authHeaders,
-          body: JSON.stringify({
-            [fields.paidCycle]: cycleKey,
-            [fields.paidGoalId]: goalId,
-            [fields.paidStatementId]: statementId,
-          }),
+          body: JSON.stringify(patchBody),
           cache: "no-store",
         }
       );

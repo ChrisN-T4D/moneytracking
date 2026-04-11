@@ -21,6 +21,8 @@ export type RecurringProjectionSnapshot = {
 interface RecurringTabProps {
   paycheckConfigs: PaycheckConfig[];
   billsWithMeta: BillOrSubWithMeta[];
+  /** YYYY-MM-DD of next payday; bills due on or after this date are excluded from "needed". */
+  nextPaydayYmd: string | null;
   spanishForkBills: SpanishForkBill[];
   autoTransfers: AutoTransfer[];
   /** For goal routing when marking paid (goal.category ↔ bill subsection). */
@@ -158,6 +160,7 @@ function neededAccountLabelClass(acct: string): string {
 export function RecurringTab({
   paycheckConfigs,
   billsWithMeta,
+  nextPaydayYmd,
   spanishForkBills,
   autoTransfers,
   goals,
@@ -195,8 +198,8 @@ export function RecurringTab({
   }, [initialAccountBalances.checking, initialAccountBalances.bills, initialAccountBalances.spanishFork]);
 
   const neededBreakdown = useMemo(
-    () => getNeededBeforeNextPaycheckBreakdown(billsWithMeta, spanishForkBills),
-    [billsWithMeta, spanishForkBills]
+    () => getNeededBeforeNextPaycheckBreakdown(billsWithMeta, spanishForkBills, nextPaydayYmd),
+    [billsWithMeta, spanishForkBills, nextPaydayYmd]
   );
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 639px)");

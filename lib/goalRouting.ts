@@ -14,6 +14,8 @@ function normalize(s: string | null | undefined): string {
 const CANONICAL_ALIASES: Record<string, string> = {
   "family payback": "payback_family",
   "payback family": "payback_family",
+  "payback jeff": "payback_jeff",
+  "jeff payback": "payback_jeff",
 };
 
 function canonicalKey(s: string | null | undefined): string {
@@ -21,16 +23,35 @@ function canonicalKey(s: string | null | undefined): string {
   return CANONICAL_ALIASES[k] ?? k;
 }
 
+function subsectionLabelFromGroupKey(groupKey: string | null | undefined): string | null {
+  const raw = (groupKey ?? "").trim();
+  if (!raw.includes("|")) return null;
+  const sub = raw.split("|")[0]?.trim() ?? "";
+  if (!sub || sub.startsWith("__")) return null;
+  return sub;
+}
+
 /**
  * Find goals whose category matches a bill name (case-insensitive, with aliases).
+ * When PocketBase subsection is set, group keys look like `Subsection|Bill name`; if the bill name
+ * does not match any goal category, also match goals whose category equals that subsection (UI copy
+ * often says category matches subsection).
  */
 export function goalsForBillName(
   goals: GoalPick[],
-  billName: string | null | undefined
+  billName: string | null | undefined,
+  billSubsectionGroupKey?: string | null
 ): GoalPick[] {
   const key = canonicalKey(billName);
-  if (!key) return [];
-  return goals.filter((g) => canonicalKey(g.category) === key);
+  if (key) {
+    const byName = goals.filter((g) => canonicalKey(g.category) === key);
+    if (byName.length > 0) return byName;
+  }
+  const sub = subsectionLabelFromGroupKey(billSubsectionGroupKey);
+  if (!sub) return [];
+  const subKey = canonicalKey(sub);
+  if (!subKey) return [];
+  return goals.filter((g) => canonicalKey(g.category) === subKey);
 }
 
 function normDisplayName(s: string): string {

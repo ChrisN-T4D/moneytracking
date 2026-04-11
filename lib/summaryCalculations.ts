@@ -4,7 +4,13 @@
  */
 
 import type { BillOrSub, AutoTransfer, SpanishForkBill, PaycheckConfig } from "./types";
+import { normalizeKeyForGrouping } from "./pocketbase";
 import { parseFlexibleDate, getNextThursdayOnOrAfter, getNextAutoTransferDate, getNextDueAndPaycheck, formatDateToYYYYMMDD } from "./paycheckDates";
+
+/** Same bill can exist twice in PocketBase (e.g. checking "bills" + "subscriptions" lists); merge for paycheck need math. */
+function paycheckNeedKey(account: string, name: string): string {
+  return `${account}|${normalizeKeyForGrouping(name)}`;
+}
 
 /** Monthly equivalent: monthly = amount, 2weeks = amount * 2, yearly = amount / 12 */
 export function monthlyEquivalent(amount: number, frequency: string): number {
@@ -261,58 +267,134 @@ function isVariableOrGroceriesBill(name: string | undefined): boolean {
   return n.length > 0 && VARIABLE_BILL_NAMES.has(n);
 }
 
+/**
+ * Whether a bill counts for "needed before next paycheck".
+ * Simple rule: if we know the next payday, any bill with nextDue >= that date is excluded.
+ * Bills due before today that haven't been marked paid (inThisPaycheck still true) remain included.
+ */
+export function billIncludedForNeededBeforePaycheck(
+  bill: { nextDue?: string; inThisPaycheck?: boolean },
+  nextPaydayYmd: string | null | undefined
+): boolean {
+  if (!(bill.inThisPaycheck ?? false)) return false;
+  if (!nextPaydayYmd) return true;
+  const d = (bill.nextDue ?? "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
+  return d < nextPaydayYmd;
+}
+
 /** Sum predicted need for items where inThisPaycheck is true (by account).
- * Excludes variable/groceries & gas bills so the $250 budget is not counted as "needed". */
+ * Excludes variable/groceries & gas bills so the $250 budget is not counted as "needed".
+ * Uses each line's payment amount (not monthlyEquivalent): a 2-week bill due this period is one payment,
+ * same window logic as requiredForPayPeriodEnd / getNextDueAndPaycheck. */
 export function requiredThisPaycheckByAccountFromBills(
-  billsWithMeta: { account?: string; listType?: string; name?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[],
-  spanishForkBills: { amount: number; frequency: string; inThisPaycheck?: boolean }[]
+  billsWithMeta: {
+    account?: string;
+    listType?: string;
+    name?: string;
+    amount: number;
+    frequency: string;
+    nextDue?: string;
+    inThisPaycheck?: boolean;
+  }[],
+  spanishForkBills: { name?: string; amount: number; frequency: string; nextDue?: string; inThisPaycheck?: boolean }[],
+  nextPaydayYmd?: string | null
 ): PredictedNeedByAccount {
-  let billsAccount = 0;
-  let checkingAccount = 0;
+  const mergedChecking = new Map<string, number>();
+  const mergedBills = new Map<string, number>();
   for (const b of billsWithMeta) {
-    if (!b.inThisPaycheck) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
     if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
-    const m = monthlyEquivalent(b.amount, b.frequency);
-    if (b.account === "bills_account") billsAccount += m;
-    else if (b.account === "checking_account") checkingAccount += m;
+    const m = Number(b.amount) || 0;
+    const name = (b.name ?? "").trim() || "Bill";
+    if (b.account === "bills_account") {
+      const k = paycheckNeedKey("bills_account", name);
+      mergedBills.set(k, (mergedBills.get(k) ?? 0) + m);
+    } else if (b.account === "checking_account") {
+      const k = paycheckNeedKey("checking_account", name);
+      mergedChecking.set(k, (mergedChecking.get(k) ?? 0) + m);
+    }
   }
-  let spanishFork = 0;
+  const billsAccount = [...mergedBills.values()].reduce((s, v) => s + v, 0);
+  const checkingAccount = [...mergedChecking.values()].reduce((s, v) => s + v, 0);
+
+  const mergedSf = new Map<string, number>();
   for (const b of spanishForkBills) {
-    if (b.inThisPaycheck) spanishFork += monthlyEquivalent(b.amount, b.frequency);
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
+    const name = (b.name ?? "").trim() || "Bill";
+    const k = normalizeKeyForGrouping(name);
+    mergedSf.set(k, (mergedSf.get(k) ?? 0) + (Number(b.amount) || 0));
   }
+  const spanishFork = [...mergedSf.values()].reduce((s, v) => s + v, 0);
   return { billsAccount, checkingAccount, spanishFork };
 }
 
 /** Per-account lists of recurring items that make up "needed before next paycheck" (same filters as requiredThisPaycheckByAccountFromBills). */
 export function getNeededBeforeNextPaycheckBreakdown(
-  billsWithMeta: { account?: string; name?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[],
-  spanishForkBills: { name?: string; amount: number; frequency: string; inThisPaycheck?: boolean }[]
+  billsWithMeta: {
+    account?: string;
+    name?: string;
+    amount: number;
+    frequency: string;
+    nextDue?: string;
+    inThisPaycheck?: boolean;
+  }[],
+  spanishForkBills: { name?: string; amount: number; frequency: string; nextDue?: string; inThisPaycheck?: boolean }[],
+  nextPaydayYmd?: string | null
 ): { checkingAccount: { name: string; amount: number }[]; billsAccount: { name: string; amount: number }[]; spanishFork: { name: string; amount: number }[] } {
-  const checking: { name: string; amount: number }[] = [];
-  const bills: { name: string; amount: number }[] = [];
+  type Line = { name: string; amount: number };
+  const mergeMap = (target: Map<string, Line>, account: "bills_account" | "checking_account", name: string, amount: number) => {
+    const k = paycheckNeedKey(account, name);
+    const prev = target.get(k);
+    if (prev) prev.amount += amount;
+    else target.set(k, { name, amount });
+  };
+  const checkingM = new Map<string, Line>();
+  const billsM = new Map<string, Line>();
   for (const b of billsWithMeta) {
-    if (!b.inThisPaycheck) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
     if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
-    const m = monthlyEquivalent(b.amount, b.frequency);
+    const m = Number(b.amount) || 0;
     const name = (b.name ?? "").trim() || "Bill";
-    if (b.account === "bills_account") bills.push({ name, amount: m });
-    else if (b.account === "checking_account") checking.push({ name, amount: m });
+    if (b.account === "bills_account") mergeMap(billsM, "bills_account", name, m);
+    else if (b.account === "checking_account") mergeMap(checkingM, "checking_account", name, m);
   }
-  const spanishFork: { name: string; amount: number }[] = [];
+  const spanishM = new Map<string, Line>();
   for (const b of spanishForkBills) {
-    if (!b.inThisPaycheck) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
     const name = (b.name ?? "").trim() || "Bill";
-    spanishFork.push({ name, amount: monthlyEquivalent(b.amount, b.frequency) });
+    const m = Number(b.amount) || 0;
+    const k = normalizeKeyForGrouping(name);
+    const prev = spanishM.get(k);
+    if (prev) prev.amount += m;
+    else spanishM.set(k, { name, amount: m });
   }
-  return { checkingAccount: checking, billsAccount: bills, spanishFork };
+  return {
+    checkingAccount: [...checkingM.values()],
+    billsAccount: [...billsM.values()],
+    spanishFork: [...spanishM.values()],
+  };
 }
 
 /** Required total (all accounts) for the 2-week period ending on periodEndDate. Uses periodStart = periodEndDate - 14 days.
  * Sums the single-payment amount for each bill due in the period (not monthly equivalent). Excludes variable/groceries & gas. */
 export function requiredForPayPeriodEnd(
-  billsWithMeta: { account?: string; name?: string; nextDue?: string; amount: number; frequency: string }[],
-  spanishForkBills: { nextDue?: string; amount: number; frequency: string }[],
-  periodEndDate: Date
+  billsWithMeta: {
+    account?: string;
+    name?: string;
+    nextDue?: string;
+    amount: number;
+    frequency: string;
+    recurringPaidCycle?: string | null;
+  }[],
+  spanishForkBills: {
+    nextDue?: string;
+    amount: number;
+    frequency: string;
+    recurringPaidCycle?: string | null;
+  }[],
+  periodEndDate: Date,
+  payPeriodEndDates?: Date[] | null
 ): number {
   const end = new Date(periodEndDate.getFullYear(), periodEndDate.getMonth(), periodEndDate.getDate());
   const start = new Date(end);
@@ -321,22 +403,32 @@ export function requiredForPayPeriodEnd(
   let total = 0;
   for (const b of billsWithMeta) {
     if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
+    const ctx = {
+      recurringPaidCycle: b.recurringPaidCycle ?? null,
+      payPeriodEndDates: payPeriodEndDates ?? undefined,
+    };
     const { inThisPaycheck } = getNextDueAndPaycheck(
       (b.nextDue ?? "").trim() || startStr,
       b.frequency ?? "",
       start,
-      end
+      end,
+      ctx
     );
     if (!inThisPaycheck) continue;
     if (b.account === "bills_account") total += b.amount;
     else if (b.account === "checking_account") total += b.amount;
   }
   for (const b of spanishForkBills) {
+    const ctx = {
+      recurringPaidCycle: b.recurringPaidCycle ?? null,
+      payPeriodEndDates: payPeriodEndDates ?? undefined,
+    };
     const { inThisPaycheck } = getNextDueAndPaycheck(
       (b.nextDue ?? "").trim() || startStr,
       b.frequency ?? "",
       start,
-      end
+      end,
+      ctx
     );
     if (inThisPaycheck) total += b.amount;
   }
@@ -474,6 +566,27 @@ export function allPayDatesNearMonth(
   }
   payDates.sort((a, b) => a.date.getTime() - b.date.getTime());
   return payDates;
+}
+
+/** All pay dates in `centerMonth ± monthRadius` (local calendar months) for schedule-based bill windows. */
+export function allPayDatesWithinMonthRadius(
+  configs: PaycheckConfig[],
+  centerYear: number,
+  centerMonth: number,
+  monthRadius: number
+): Date[] {
+  const out: Date[] = [];
+  for (let i = -monthRadius; i <= monthRadius; i++) {
+    const d = new Date(centerYear, centerMonth + i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    for (const c of configs) {
+      const dates = getPaycheckDatesInMonth([c], y, m);
+      for (const x of dates) out.push(new Date(x.date.getTime()));
+    }
+  }
+  out.sort((a, b) => a.getTime() - b.getTime());
+  return out;
 }
 
 /** Total expected paychecks this month and their dates. */

@@ -1,5 +1,7 @@
+import { biweeklyCycleKeyForDue } from "./biweeklyCycleKey";
+
 /** Parse a YYYY-MM-DD string (or ISO string — only the date part is used) to local midnight. */
-export function parseLocalDateString(dateStr: string): Date {
+function parseLocalDateString(dateStr: string): Date {
   const datePart = dateStr.includes("T") ? dateStr.split("T")[0]! : dateStr;
   const [y, m, d] = datePart.split("-").map(Number);
   if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return new Date(dateStr);
@@ -10,6 +12,34 @@ export function parseLocalDateString(dateStr: string): Date {
 function toLocalDay(d: Date | string): Date {
   if (typeof d === "string") return parseLocalDateString(d);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Local calendar day as YYYYMMDD for inclusive range checks. */
+function calendarDayKey(d: Date): number {
+  const x = toLocalDay(d);
+  return x.getFullYear() * 10000 + (x.getMonth() + 1) * 100 + x.getDate();
+}
+
+/**
+ * Find the next pay date strictly after `referenceDate` from a list of all pay dates,
+ * and return the day before it as the exclusive end of "this paycheck" window.
+ * Bills due on or after the next pay date belong to the next cycle, not this one.
+ */
+export function getNextPaydayFromSchedule(
+  referenceDate: Date,
+  payDates: Date[]
+): Date | null {
+  const refK = calendarDayKey(toLocalDay(referenceDate));
+  let earliest: Date | null = null;
+  let earliestK = Infinity;
+  for (const p of payDates) {
+    const pk = calendarDayKey(toLocalDay(p));
+    if (pk > refK && pk < earliestK) {
+      earliestK = pk;
+      earliest = toLocalDay(p);
+    }
+  }
+  return earliest;
 }
 
 /** Next Thursday on or after `date` (returns same day when already Thursday). */
@@ -102,7 +132,7 @@ export function formatDateForDue(dateStr: string, frequency?: string): string {
  * returns the YYYY-MM string for month M+1 — the month it's intended to cover.
  * e.g. a Feb 27 paycheck → "2026-03"
  */
-export function billingYearMonthForLastWorkingDay(payDate: Date): string {
+function billingYearMonthForLastWorkingDay(payDate: Date): string {
   const d = toLocalDay(payDate);
   const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
   return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
@@ -209,7 +239,7 @@ export function getTodayUTC(): Date {
 }
 
 /** True if date is within the next 14 days from ref (inclusive: ref through ref+14). */
-export function isDueInNextTwoWeeks(date: Date, ref: Date | string = new Date()): boolean {
+function isDueInNextTwoWeeks(date: Date, ref: Date | string = new Date()): boolean {
   const r = typeof ref === "string" ? parseFlexibleDate(ref) : toLocalDay(ref);
   const d = toLocalDay(date);
   if (Number.isNaN(d.getTime()) || Number.isNaN(r.getTime())) return false;
@@ -218,17 +248,70 @@ export function isDueInNextTwoWeeks(date: Date, ref: Date | string = new Date())
 }
 
 /**
- * Next due date on or after reference, advanced by frequency.
- * Returns the next due date string (YYYY-MM-DD) and whether it falls in "this paycheck" window.
- * When paycheckEndDate is provided (e.g. next biweekly pay date), "in this paycheck" = due on or before that date.
- * Otherwise uses a fixed 14-day window from referenceDate.
+ * After Recurring "Mark paid" for calendar occurrence `occurrenceYmd`, compute the following due date
+ * (anchor = that occurrence, not the old PB value, so stale nextDue cannot skip cycles).
+ */
+export function advanceNextDueAfterPaidOccurrence(
+  frequency: string,
+  occurrenceYmd: string
+): string | null {
+  const trimmed = occurrenceYmd.trim();
+  const occ = parseFlexibleDate(trimmed);
+  if (Number.isNaN(occ.getTime())) return null;
+  const ref = toLocalDay(occ);
+  ref.setDate(ref.getDate() + 1);
+  const next = getNextAutoTransferDate(trimmed, frequency, ref);
+  if (Number.isNaN(next.getTime())) return null;
+  return formatDateToYYYYMMDD(next);
+}
+
+/**
+ * Next due date for display + "in this paycheck".
+ * When the stored date is before today, keep showing it (overdue) until PocketBase `nextDue` is advanced
+ * (e.g. via Recurring Mark paid) — do not roll forward in the UI just because time passed.
+ * When paycheckEndDate is provided, due dates fall in [payDate-14, payDate] inclusive, with the
+ * overdue-unpaid extension via recurringPaidCycle + payPeriodEndDates.
+ * The actual "needed before next paycheck" filtering happens at the consumption site
+ * (billIncludedForNeededBeforePaycheck) using the next payday date as a hard cutoff.
+ * Otherwise: due in the next 14 days from reference, or overdue within the prior 14 days only (unless paid).
  * Use getTodayUTC() as referenceDate when computing on the server so dates advance correctly regardless of server timezone.
  */
+export type NextDuePaycheckContext = {
+  recurringPaidCycle?: string | null;
+  payPeriodEndDates?: Date[] | null;
+};
+
+function expectedRecurringCycleKeyForDue(
+  dueYmd: string,
+  frequency: string,
+  payPeriodEndDates?: Date[] | null
+): string {
+  const f = (frequency ?? "").toLowerCase().replace(/\s/g, "");
+  const is2W =
+    f === "2weeks" || (f.includes("2") && (f.includes("week") || f.includes("wk")));
+  if (is2W) {
+    if (payPeriodEndDates && payPeriodEndDates.length > 0) {
+      return biweeklyCycleKeyForDue(dueYmd, payPeriodEndDates);
+    }
+    return `b:${dueYmd}`;
+  }
+  if (f.includes("year")) {
+    return `y:${dueYmd.slice(0, 4)}`;
+  }
+  const d = parseFlexibleDate(dueYmd);
+  if (Number.isNaN(d.getTime())) {
+    const m = dueYmd.match(/^(\d{4})-(\d{2})/);
+    return m ? `m:${m[1]}-${m[2]}` : `m:${dueYmd}`;
+  }
+  return `m:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function getNextDueAndPaycheck(
   nextDueStr: string,
   frequency: string,
   referenceDate: Date | string = new Date(),
-  paycheckEndDate?: Date | null
+  paycheckEndDate?: Date | null,
+  context?: NextDuePaycheckContext | null
 ): { nextDue: string; inThisPaycheck: boolean } {
   const ref = typeof referenceDate === "string" ? parseFlexibleDate(referenceDate) : toLocalDay(referenceDate);
   const biweeklyEnd =
@@ -236,23 +319,51 @@ export function getNextDueAndPaycheck(
       ? toLocalDay(paycheckEndDate)
       : null;
 
-  // Next due: always advance by frequency from stored date (so 2-week items keep your actual schedule, e.g. last pay Feb 13 → next due Feb 27)
-  const next = getNextAutoTransferDate(nextDueStr, frequency, ref);
+  const trimmed = (nextDueStr ?? "").trim();
+  const stored = parseFlexibleDate(trimmed);
+  const rolled = getNextAutoTransferDate(trimmed, frequency, ref);
 
-  if (Number.isNaN(next.getTime())) {
-    return { nextDue: (nextDueStr ?? "").trim() || formatDateToYYYYMMDD(ref), inThisPaycheck: false };
+  let nextDay: Date;
+  let nextDue: string;
+
+  if (!Number.isNaN(stored.getTime()) && toLocalDay(stored) < ref && !Number.isNaN(rolled.getTime())) {
+    nextDay = toLocalDay(stored);
+    nextDue = formatDateToYYYYMMDD(nextDay);
+  } else if (!Number.isNaN(rolled.getTime())) {
+    nextDay = toLocalDay(rolled);
+    nextDue = formatDateToYYYYMMDD(nextDay);
+  } else {
+    return { nextDue: trimmed || formatDateToYYYYMMDD(ref), inThisPaycheck: false };
   }
-  const nextDue = formatDateToYYYYMMDD(next);
-  // Bills due on the same day as the paycheck are not "needed before next income" (income lands that day).
-  // Use day before pay date as inclusive end so pay-day bills are never counted (avoids timezone/edge issues).
-  const nextDay = toLocalDay(next);
+
+  const n = calendarDayKey(nextDay);
+
   let inThisPaycheck: boolean;
   if (biweeklyEnd != null) {
-    const dayBeforePay = new Date(biweeklyEnd.getFullYear(), biweeklyEnd.getMonth(), biweeklyEnd.getDate());
-    dayBeforePay.setDate(dayBeforePay.getDate() - 1);
-    inThisPaycheck = nextDay >= ref && nextDay <= dayBeforePay;
+    const endDay = toLocalDay(biweeklyEnd);
+    const periodStart = new Date(endDay.getFullYear(), endDay.getMonth(), endDay.getDate());
+    periodStart.setDate(periodStart.getDate() - 14);
+    const lo = calendarDayKey(periodStart);
+    const hi = calendarDayKey(endDay);
+    inThisPaycheck = n >= lo && n <= hi;
+
+    if (!inThisPaycheck && n < lo) {
+      const dueYmd = formatDateToYYYYMMDD(nextDay);
+      const expectedKey = expectedRecurringCycleKeyForDue(
+        dueYmd,
+        frequency,
+        context?.payPeriodEndDates
+      );
+      const paidCycleKey = (context?.recurringPaidCycle ?? "").trim();
+      inThisPaycheck = paidCycleKey !== expectedKey;
+    }
   } else {
-    inThisPaycheck = isDueInNextTwoWeeks(next, ref);
+    const windowStart = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+    windowStart.setDate(windowStart.getDate() - 14);
+    const inRollingFuture = isDueInNextTwoWeeks(nextDay, ref);
+    const overdueRecent =
+      nextDay < ref && calendarDayKey(nextDay) >= calendarDayKey(windowStart);
+    inThisPaycheck = inRollingFuture || overdueRecent;
   }
   return { nextDue, inThisPaycheck };
 }

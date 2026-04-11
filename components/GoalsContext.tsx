@@ -26,6 +26,18 @@ interface GoalsContextValue {
 
 const GoalsContext = createContext<GoalsContextValue | null>(null);
 
+/** Must match GoalsSection handleDelete — only seed goals (g1, g2, …) use deletedStaticGoals. */
+function isStaticSeedGoalId(id: string): boolean {
+  return id.length < 10 || /^g\d+$/.test(id);
+}
+
+function filterVisibleGoals(list: MoneyGoal[]): MoneyGoal[] {
+  const deleted = safeDeletedIds();
+  return list.filter(
+    (g) => !isStaticSeedGoalId(g.id) || !deleted.includes(g.id)
+  );
+}
+
 export function GoalsProvider({
   initialGoals,
   goalStatementsById: rawStatements,
@@ -37,25 +49,19 @@ export function GoalsProvider({
     | Record<string, GoalTransaction[]>;
   children: ReactNode;
 }) {
-  const [goals, setGoals] = useState<MoneyGoal[]>(() => {
-    const deleted = safeDeletedIds();
-    return initialGoals.filter((g) => !deleted.includes(g.id));
-  });
+  const [goals, setGoals] = useState<MoneyGoal[]>(() => filterVisibleGoals(initialGoals));
 
   // Merge server goals on every refresh (router.refresh() triggers new initialGoals prop)
   useEffect(() => {
-    const deleted = safeDeletedIds();
     setGoals((prev) =>
-      initialGoals
-        .filter((g) => !deleted.includes(g.id))
-        .map((g) => {
-          const local = prev.find((p) => p.id === g.id);
-          return {
-            ...g,
-            monthlyContribution:
-              local?.monthlyContribution ?? g.monthlyContribution,
-          };
-        })
+      filterVisibleGoals(initialGoals).map((g) => {
+        const local = prev.find((p) => p.id === g.id);
+        return {
+          ...g,
+          monthlyContribution:
+            local?.monthlyContribution ?? g.monthlyContribution,
+        };
+      })
     );
   }, [initialGoals]);
 

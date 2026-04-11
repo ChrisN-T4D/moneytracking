@@ -5,41 +5,11 @@
  * - 2weeks: b:YYYY-MM-DD (paycheck period end date, same window logic as billCycleUtils)
  */
 import type { PaycheckConfig } from "./types";
+import { biweeklyCycleKeyForDue } from "./biweeklyCycleKey";
 import { allPayDatesNearMonth } from "./summaryCalculations";
-
-function toDateOnly(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 export function viewMonthKey(year: number, monthIndex: number): string {
   return `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
-}
-
-/** Biweekly cycle key: period end date P such that due falls in [P-14, P] (inclusive, date strings). */
-export function biweeklyCycleKeyForDue(
-  dueYmd: string,
-  payPeriodEndDates: Date[]
-): string {
-  const ends = [...new Set(payPeriodEndDates.map((d) => toDateOnly(d)))].sort();
-  for (const endStr of ends) {
-    const end = new Date(
-      Number(endStr.slice(0, 4)),
-      Number(endStr.slice(5, 7)) - 1,
-      Number(endStr.slice(8, 10))
-    );
-    const start = new Date(end);
-    start.setDate(start.getDate() - 14);
-    const startStr = toDateOnly(start);
-    if (dueYmd >= startStr && dueYmd <= endStr) return `b:${endStr}`;
-  }
-  for (const endStr of ends) {
-    if (dueYmd <= endStr) return `b:${endStr}`;
-  }
-  if (ends.length > 0) return `b:${ends[ends.length - 1]!}`;
-  return `b:${dueYmd}`;
 }
 
 export function recurringCycleKeyForExpense(
