@@ -31,11 +31,65 @@ function isStaticSeedGoalId(id: string): boolean {
   return id.length < 10 || /^g\d+$/.test(id);
 }
 
+function safeDeletedIds(): string[] {
+  try {
+    return JSON.parse(
+      localStorage.getItem("deletedStaticGoals") || "[]"
+    ) as string[];
+  } catch {
+    return [];
+  }
+}
+
 function filterVisibleGoals(list: MoneyGoal[]): MoneyGoal[] {
   const deleted = safeDeletedIds();
   return list.filter(
     (g) => !isStaticSeedGoalId(g.id) || !deleted.includes(g.id)
   );
+}
+
+const MANUAL_GOAL_DELTA_KEY = "moneytracking_goalManualProgressDelta";
+
+function getStoredManualProgressDelta(goalId: string): number {
+  try {
+    const raw = localStorage.getItem(MANUAL_GOAL_DELTA_KEY);
+    if (!raw) return 0;
+    const map = JSON.parse(raw) as Record<string, number>;
+    const n = Number(map[goalId]);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Persist extra goal progress the app cannot tag from statements. */
+export function addStoredManualProgressDelta(goalId: string, delta: number): void {
+  if (!goalId || !Number.isFinite(delta) || delta === 0) return;
+  try {
+    const raw = localStorage.getItem(MANUAL_GOAL_DELTA_KEY);
+    const map: Record<string, number> = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    const prev = Number(map[goalId]) || 0;
+    map[goalId] = Math.max(0, prev + delta);
+    localStorage.setItem(MANUAL_GOAL_DELTA_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+function normalizeStatementsMap(
+  raw:
+    | Map<string, GoalTransaction[]>
+    | Record<string, GoalTransaction[]>
+    | undefined
+): Map<string, GoalTransaction[]> {
+  if (!raw) return new Map();
+  if (raw instanceof Map) return raw;
+  if (typeof raw === "object") {
+    return new Map(
+      Object.entries(raw).filter(([, v]) => Array.isArray(v))
+    );
+  }
+  return new Map();
 }
 
 export function GoalsProvider({
@@ -49,17 +103,25 @@ export function GoalsProvider({
     | Record<string, GoalTransaction[]>;
   children: ReactNode;
 }) {
-  const [goals, setGoals] = useState<MoneyGoal[]>(() => filterVisibleGoals(initialGoals));
+  const [goals, setGoals] = useState<MoneyGoal[]>(() => {
+    return filterVisibleGoals(initialGoals)
+      .map((g) => ({
+        ...g,
+        currentAmount: g.currentAmount + getStoredManualProgressDelta(g.id),
+      }));
+  });
 
   // Merge server goals on every refresh (router.refresh() triggers new initialGoals prop)
   useEffect(() => {
     setGoals((prev) =>
       filterVisibleGoals(initialGoals).map((g) => {
         const local = prev.find((p) => p.id === g.id);
+        const manualDelta = getStoredManualProgressDelta(g.id);
         return {
           ...g,
           monthlyContribution:
             local?.monthlyContribution ?? g.monthlyContribution,
+          currentAmount: g.currentAmount + manualDelta,
         };
       })
     );
@@ -99,30 +161,4 @@ export function useGoals() {
   const ctx = useContext(GoalsContext);
   if (!ctx) throw new Error("useGoals must be used inside GoalsProvider");
   return ctx;
-}
-
-function safeDeletedIds(): string[] {
-  try {
-    return JSON.parse(
-      localStorage.getItem("deletedStaticGoals") || "[]"
-    ) as string[];
-  } catch {
-    return [];
-  }
-}
-
-function normalizeStatementsMap(
-  raw:
-    | Map<string, GoalTransaction[]>
-    | Record<string, GoalTransaction[]>
-    | undefined
-): Map<string, GoalTransaction[]> {
-  if (!raw) return new Map();
-  if (raw instanceof Map) return raw;
-  if (typeof raw === "object") {
-    return new Map(
-      Object.entries(raw).filter(([, v]) => Array.isArray(v))
-    );
-  }
-  return new Map();
 }

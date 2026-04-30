@@ -72,6 +72,9 @@ const ACCOUNT_LABELS: Record<string, string> = {
   spanish_fork: "Spanish Fork",
 };
 
+/** Order for "by account" list and monthly outflow totals in Check-in. */
+const RECURRING_ACCOUNT_ORDER = ["checking_account", "bills_account", "spanish_fork"] as const;
+
 function accountLabel(account: string): string {
   const lower = (account ?? "").toLowerCase().replace(/\s/g, "_");
   if (lower.includes("bills") && !lower.includes("spanish")) return ACCOUNT_LABELS.bills_account;
@@ -424,10 +427,9 @@ export function RecurringTab({
   }, [events, isCurrentMonth, todayYMD]);
 
   // Group upcoming by account: incoming and outgoing lists per account
-  const ACCOUNT_ORDER = ["checking_account", "bills_account", "spanish_fork"] as const;
   const upcomingByAccount = useMemo(() => {
     const result: Record<string, { incoming: RecurringEvent[]; outgoing: RecurringEvent[] }> = {};
-    for (const acct of ACCOUNT_ORDER) {
+    for (const acct of RECURRING_ACCOUNT_ORDER) {
       const incoming = upcomingEvents.filter(
         (e) =>
           (e.type === "income" && e.account === acct) || (e.type === "transfer" && e.account === acct)
@@ -445,6 +447,24 @@ export function RecurringTab({
     }
     return result;
   }, [upcomingEvents]);
+
+  /** Full calendar month: bills + auto-transfers leaving each account (planning total). */
+  const estimatedMonthlyOutflowsByAccount = useMemo(() => {
+    const totals: Record<(typeof RECURRING_ACCOUNT_ORDER)[number], number> = {
+      checking_account: 0,
+      bills_account: 0,
+      spanish_fork: 0,
+    };
+    for (const e of events) {
+      if (e.type === "expense" && e.account in totals) {
+        totals[e.account as keyof typeof totals] += e.amount;
+      }
+      if (e.type === "transfer" && e.fromAccount && e.fromAccount in totals) {
+        totals[e.fromAccount as keyof typeof totals] += e.amount;
+      }
+    }
+    return totals;
+  }, [events]);
 
   function goToday() { setViewMonth(new Date(today.getFullYear(), today.getMonth(), 1)); }
   function prevMonth() { setViewMonth(new Date(year, month - 1, 1)); }
@@ -812,10 +832,28 @@ export function RecurringTab({
       {/* List view: upcoming by account with Incoming / Outgoing */}
       {view === "list" && (
         <div className={getCardClasses(theme.summary)}>
+          <div className="mb-4 pb-3 border-b border-neutral-200 dark:border-neutral-700">
+            <p className="text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 uppercase tracking-wider mb-2">
+              Estimated total out this month
+            </p>
+            <ul className="space-y-1.5">
+              {RECURRING_ACCOUNT_ORDER.map((acct) => (
+                <li key={acct} className="flex items-center justify-between gap-2 text-sm">
+                  <span className={`font-medium ${neededAccountLabelClass(acct)}`}>{accountLabel(acct)}</span>
+                  <span className="tabular-nums font-semibold text-neutral-800 dark:text-neutral-100">
+                    {formatCurrency(estimatedMonthlyOutflowsByAccount[acct])}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[10px] text-neutral-500 dark:text-neutral-500 leading-snug">
+              Scheduled bills plus transfers out of each account in {monthName} (includes items already marked paid).
+            </p>
+          </div>
           <h3 className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider mb-3">
             {isCurrentMonth ? "Upcoming by account" : "All by account"}
           </h3>
-          {ACCOUNT_ORDER.map((acct) => {
+          {RECURRING_ACCOUNT_ORDER.map((acct) => {
             const section = upcomingByAccount[acct];
             if (!section || (section.incoming.length === 0 && section.outgoing.length === 0)) return null;
             return (

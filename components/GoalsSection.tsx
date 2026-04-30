@@ -6,7 +6,7 @@ import { formatCurrency } from "@/lib/format";
 import type { MoneyGoal } from "@/lib/types";
 import { getCardClasses, getSectionLabelClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
-import { useGoals } from "./GoalsContext";
+import { addStoredManualProgressDelta, useGoals } from "./GoalsContext";
 
 function formatDateShort(dateStr: string): string {
   const d = dateStr.slice(0, 10);
@@ -31,7 +31,71 @@ export function GoalsSection() {
   const [contribError, setContribError] = useState<string | null>(null);
   const contribRef = useRef<HTMLInputElement>(null);
   const [clearingGoalId, setClearingGoalId] = useState<string | null>(null);
+  const [manualProgressGoalId, setManualProgressGoalId] = useState<string | null>(null);
+  const [manualProgressAmount, setManualProgressAmount] = useState("");
+  const [manualProgressSaving, setManualProgressSaving] = useState<string | null>(null);
   const router = useRouter();
+
+  function isStaticGoalId(id: string): boolean {
+    return id.length < 10 || /^g\d+$/.test(id);
+  }
+
+  async function handleApplyManualProgress(goalId: string) {
+    const n = Number(manualProgressAmount.trim());
+    if (!Number.isFinite(n) || n <= 0) {
+      setError("Enter a positive amount to add toward this goal.");
+      return;
+    }
+    setError("");
+    setManualProgressSaving(goalId);
+    try {
+      if (isStaticGoalId(goalId)) {
+        addStoredManualProgressDelta(goalId, n);
+        setGoals((prev) =>
+          prev.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + n } : g))
+        );
+        setManualProgressGoalId(null);
+        setManualProgressAmount("");
+        return;
+      }
+      const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentAmountDelta: n }),
+        credentials: "include",
+      });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+      if (!res.ok || data.ok === false) {
+        // Fallback: keep progress locally when server save fails (e.g. expired auth cookie).
+        addStoredManualProgressDelta(goalId, n);
+        setGoals((prev) =>
+          prev.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + n } : g))
+        );
+        setManualProgressGoalId(null);
+        setManualProgressAmount("");
+        setError(
+          `${data.message ?? `Could not sync (${res.status})`} Saved locally and will still show in progress.`
+        );
+        return;
+      }
+      setGoals((prev) =>
+        prev.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + n } : g))
+      );
+      setManualProgressGoalId(null);
+      setManualProgressAmount("");
+      router.refresh();
+    } catch {
+      addStoredManualProgressDelta(goalId, n);
+      setGoals((prev) =>
+        prev.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + n } : g))
+      );
+      setManualProgressGoalId(null);
+      setManualProgressAmount("");
+      setError("Could not connect to server. Saved locally and applied to progress.");
+    } finally {
+      setManualProgressSaving(null);
+    }
+  }
 
   async function handleAddGoal(e: React.FormEvent) {
     e.preventDefault();
@@ -166,7 +230,9 @@ export function GoalsSection() {
     <section className={getCardClasses(theme.summary)}>
       <h2 className={getSectionLabelClasses(theme.summary)}>Money goals</h2>
       <p className="mb-3 text-xs text-neutral-600 dark:text-neutral-400">
-        Track progress toward your current savings and payoff goals.
+        Track progress toward your current savings and payoff goals. Use{" "}
+        <span className="font-medium text-neutral-700 dark:text-neutral-300">Add payment</span> for
+        cash or transfers the app cannot tag.
       </p>
 
       <form onSubmit={handleAddGoal} className="mb-3 flex flex-wrap items-end gap-2">
@@ -343,6 +409,61 @@ export function GoalsSection() {
                     style={{ width: `${pct}%` }}
                   />
                 </div>
+                {manualProgressGoalId === g.id ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] text-neutral-500 dark:text-neutral-400 shrink-0">
+                      Add to progress
+                    </span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={0.01}
+                      step={0.01}
+                      value={manualProgressAmount}
+                      onChange={(e) => setManualProgressAmount(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleApplyManualProgress(g.id);
+                        if (e.key === "Escape") {
+                          setManualProgressGoalId(null);
+                          setManualProgressAmount("");
+                        }
+                      }}
+                      placeholder="0.00"
+                      className="w-24 rounded border border-sky-400 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-right text-xs tabular-nums text-neutral-900 dark:text-neutral-100 outline-none"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      disabled={manualProgressSaving === g.id}
+                      onClick={() => void handleApplyManualProgress(g.id)}
+                      className="rounded-md bg-sky-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+                    >
+                      {manualProgressSaving === g.id ? "Saving…" : "Apply"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={manualProgressSaving === g.id}
+                      onClick={() => {
+                        setManualProgressGoalId(null);
+                        setManualProgressAmount("");
+                      }}
+                      className="text-[11px] text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManualProgressGoalId(g.id);
+                      setManualProgressAmount("");
+                    }}
+                    className="mt-2 text-[11px] text-sky-600 dark:text-sky-400 hover:underline"
+                  >
+                    Add payment (off tracking)
+                  </button>
+                )}
                 {g.targetDate && (
                   <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
                     Target by {g.targetDate}
