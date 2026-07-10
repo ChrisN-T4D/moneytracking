@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { formatCurrency, displayBillName } from "@/lib/format";
 import { spanishForkMortgageDisplayName } from "@/lib/mortgageBillNames";
-import { formatDateNoYear } from "@/lib/paycheckDates";
+import { formatDateForDue, formatDateNoYear, parseFlexibleDate } from "@/lib/paycheckDates";
 import type { SpanishForkBill, Frequency } from "@/lib/types";
 import type { ActualBreakdownItem } from "@/lib/statementTagging";
 import { paidCycleStatus } from "@/lib/billCycleUtils";
@@ -116,7 +116,8 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
     });
     if (cycle?.isPaid) return cycle.nextCycleDate;
     if (!bill.nextDue) return null;
-    return new Date(bill.nextDue);
+    const d = parseFlexibleDate(bill.nextDue);
+    return Number.isNaN(d.getTime()) ? null : d;
   }
 
   function sortBills(list: SpanishForkBill[]): SpanishForkBill[] {
@@ -209,6 +210,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
     setToggling(bill.id);
     try {
       const res = await fetch(`/api/spanish-fork-bills/${bill.id}`, {
+        credentials: "include",
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tenantPaid: newValue }),
@@ -231,7 +233,8 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
     setDeleteError(null);
     setDeletingId(bill.id);
     try {
-      const res = await fetch(`/api/spanish-fork-bills/${bill.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/spanish-fork-bills/${bill.id}`, {
+        credentials: "include", method: "DELETE" });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
       if (!res.ok) {
         setDeleteError(data.message ?? `Error ${res.status}`);
@@ -285,6 +288,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
       const res = await fetch(`/api/spanish-fork-bills/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ name: newName }),
       });
       if (!res.ok) {
@@ -294,11 +298,12 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
         return;
       }
       setNameEdit(null);
-      router.refresh();
     } catch {
       setBills((prev) => prev.map((b) => (b.id === id ? { ...b, name: oldName } : b)));
       setNameEdit((e) => (e ? { ...e, saving: false, error: "Save failed" } : null));
+      return;
     }
+    router.refresh();
   }, [nameEdit, router]);
 
   const commitEdit = useCallback(async (bill: SpanishForkBill) => {
@@ -316,6 +321,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
 
     try {
       const res = await fetch(`/api/spanish-fork-bills/${bill.id}`, {
+        credentials: "include",
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount }),
@@ -342,6 +348,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
     setTenantRentError(null);
     try {
       const res = await fetch("/api/summary", {
+        credentials: "include",
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ spanishForkTenantRentMonthly: value }),
@@ -509,8 +516,8 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
                 paycheckEndDate: paycheckEndDate ?? null,
               });
               const today = new Date(); today.setHours(0, 0, 0, 0);
-              const dueDate = bill.nextDue ? new Date(bill.nextDue) : null;
-              const isOverdue = !cycle?.isPaid && dueDate && dueDate < today;
+              const dueDate = bill.nextDue ? parseFlexibleDate(bill.nextDue) : null;
+              const isOverdue = !cycle?.isPaid && dueDate && !Number.isNaN(dueDate.getTime()) && dueDate < today;
               return (
                 <tr
                   key={bill.id}
@@ -615,11 +622,11 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
                           onClick={() => setDateEditModal(bill)}
                           className={`text-left font-medium text-sm hover:underline underline-offset-2 ${isOverdue ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}
                         >
-                          {formatDateNoYear(new Date(bill.nextDue))}
+                          {formatDateForDue(bill.nextDue, bill.frequency)}
                         </button>
                       ) : (
                         <span className={`font-medium text-sm ${isOverdue ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
-                          {formatDateNoYear(new Date(bill.nextDue))}
+                          {formatDateForDue(bill.nextDue, bill.frequency)}
                         </span>
                       )
                     ) : canDelete ? (
@@ -897,6 +904,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
                       setDateEditSaving(true);
                       try {
                         const res = await fetch(`/api/spanish-fork-bills/${b.id}`, {
+                          credentials: "include",
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ nextDue }),
@@ -922,6 +930,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
                       setDateEditSaving(true);
                       try {
                         const res = await fetch(`/api/spanish-fork-bills/${b.id}`, {
+                          credentials: "include",
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ nextDue: "" }),
@@ -1061,6 +1070,7 @@ export function SpanishForkSection({ bills: initialBills, title = "Spanish Fork 
                       setAddBillError(null);
                       try {
                         const res = await fetch("/api/spanish-fork-bills", {
+                          credentials: "include",
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({

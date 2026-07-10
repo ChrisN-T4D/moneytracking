@@ -32,6 +32,8 @@ export const PB = {
     paidCycle: "recurringPaidCycle",
     paidGoalId: "recurringPaidGoalId",
     paidStatementId: "recurringPaidStatementId",
+    paycheckAmountOverride: "paycheckAmountOverride",
+    paycheckAmountOverrideFor: "paycheckAmountOverrideFor",
   },
   spanishForkBills: {
     name: "name",
@@ -43,6 +45,8 @@ export const PB = {
     paidCycle: "recurringPaidCycle",
     paidGoalId: "recurringPaidGoalId",
     paidStatementId: "recurringPaidStatementID",
+    paycheckAmountOverride: "paycheckAmountOverride",
+    paycheckAmountOverrideFor: "paycheckAmountOverrideFor",
   },
   goals: {
     name: "name",

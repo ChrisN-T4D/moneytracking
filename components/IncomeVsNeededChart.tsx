@@ -379,7 +379,7 @@ export function IncomeVsNeededChart({
             </p>
             <p className="text-xs mt-0.5 text-sky-700 dark:text-sky-300">
               {usePaycheckFormula
-                ? "Next paycheck − auto transfers − bills (checking) − goals − variable"
+                ? "Next paycheck − checking bills − transfers out − goals − variable"
                 : `${currentMonthName ?? "This month"} total extra: ${formatCurrency(leftOver)} (÷ 2 paychecks)`}
             </p>
           </div>
@@ -444,7 +444,7 @@ export function IncomeVsNeededChart({
             </p>
             <p className="text-xs mt-0.5 text-sky-700 dark:text-sky-300">
               {usePaycheckFormula
-                ? "Next paycheck − auto transfers − bills (checking) − goals − variable"
+                ? "Next paycheck − checking bills − transfers out − goals − variable"
                 : `${currentMonthName ?? "This month"} total extra: ${formatCurrency(leftOver)} (÷ 2 paychecks)`}
             </p>
           </div>

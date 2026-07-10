@@ -4,13 +4,14 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { formatCurrency, displayBillName } from "@/lib/format";
-import { formatDateForDue, formatDateNoYear } from "@/lib/paycheckDates";
+import { formatDateForDue, formatDateNoYear, parseFlexibleDate } from "@/lib/paycheckDates";
 import type { BillOrSub, Frequency } from "@/lib/types";
 import { isGroupedBillId, isSyntheticBillSubsectionKey } from "@/lib/pocketbase";
 import type { ActualBreakdownItem } from "@/lib/statementTagging";
 import { getCardClasses } from "@/lib/themePalettes";
 import { useTheme } from "./ThemeProvider";
 import { addCycle as addCycleUtil, lastPaidDate, paidCycleStatus as paidCycleStatusUtil, paidThisAndLastCycle } from "@/lib/billCycleUtils";
+import { billsApiFetch, billsApiErrorMessage, billPatchUrl, billDatePatchUrl, billDeleteUrl } from "@/lib/billsApiClient";
 
 interface BillsListProps {
   title: string;
@@ -141,7 +142,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
     const cycle = paidCycleStatus(item, bd, pa ?? undefined, paycheckEndDate, billCycleCalendarRef);
     if (cycle?.isPaid) return cycle.nextCycleDate;
     if (!item.nextDue) return null;
-    return new Date(item.nextDue);
+    const d = parseFlexibleDate(item.nextDue);
+    return Number.isNaN(d.getTime()) ? null : d;
   }
 
   function sortBills(list: BillOrSub[]): BillOrSub[] {
@@ -268,6 +270,11 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
 
   const cancelNameEdit = useCallback(() => setNameEdit(null), []);
 
+  const sectionCtx =
+    sectionAccount && sectionListType
+      ? { account: sectionAccount, listType: sectionListType }
+      : undefined;
+
   const commitNameEdit = useCallback(async () => {
     if (!nameEdit || nameEdit.saving) return;
     const newName = nameEdit.value.trim();
@@ -292,27 +299,26 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
         );
         return;
       }
-      const url =
-        isGrouped && sectionAccount && sectionListType
-          ? `/api/bills/update-by-name?name=${encodeURIComponent(oldName)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
-          : `/api/bills/${id}`;
-      const res = await fetch(url, {
+      const row = items.find((b) => b.id === id);
+      const url = row ? billPatchUrl(row, sectionCtx) : `/api/bills/${id}`;
+      const res = await billsApiFetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: newName }),
       });
       if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        const message = await billsApiErrorMessage(res);
         setItems((prev) => prev.map((b) => (b.id === id ? { ...b, name: oldName } : b)));
-        setNameEdit((e) => (e ? { ...e, saving: false, error: data.message ?? "Save failed" } : null));
+        setNameEdit((e) => (e ? { ...e, saving: false, error: message } : null));
         return;
       }
       setNameEdit(null);
-      router.refresh();
     } catch {
       setItems((prev) => prev.map((b) => (b.id === id ? { ...b, name: oldName } : b)));
       setNameEdit((e) => (e ? { ...e, saving: false, error: "Save failed" } : null));
+      return;
     }
+    router.refresh();
   }, [nameEdit, sectionAccount, sectionListType, router]);
 
   const commitEdit = useCallback(async (item: BillOrSub) => {
@@ -329,39 +335,34 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
     setItems((prev) => prev.map((b) => b.id === item.id ? { ...b, amount } : b));
 
     try {
-      const isGrouped = isGroupedBillId(item.id);
-      const url = isGrouped && sectionAccount && sectionListType
-        ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
-        : `/api/bills/${item.id}`;
-      const res = await fetch(url, {
+      const url = billPatchUrl(item, sectionCtx);
+      const res = await billsApiFetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount }),
       });
       if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { message?: string };
+        const message = await billsApiErrorMessage(res);
         setItems((prev) => prev.map((b) => b.id === item.id ? { ...b, amount: item.amount } : b));
-        setEdit((e) => e ? { ...e, saving: false, error: data.message ?? "Save failed" } : null);
+        setEdit((e) => e ? { ...e, saving: false, error: message } : null);
         return;
       }
       setEdit(null);
-      router.refresh();
     } catch {
       setItems((prev) => prev.map((b) => b.id === item.id ? { ...b, amount: item.amount } : b));
       setEdit((e) => e ? { ...e, saving: false, error: "Save failed" } : null);
+      return;
     }
-  }, [edit, sectionAccount, sectionListType]);
+    router.refresh();
+  }, [edit, sectionAccount, sectionListType, router]);
 
   const handleDelete = useCallback(async (item: BillOrSub) => {
     if (!confirm(`Delete "${displayBillName(item.name)}"?`)) return;
     setDeleteError(null);
     setDeletingId(item.id);
     try {
-      const isGrouped = isGroupedBillId(item.id);
-      const url = isGrouped && sectionAccount && sectionListType
-        ? `/api/bills/delete-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
-        : `/api/bills/${item.id}`;
-      const res = await fetch(url, { method: "DELETE" });
+      const url = billDeleteUrl(item, sectionCtx);
+      const res = await billsApiFetch(url, { method: "DELETE" });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
       if (!res.ok) {
         setDeleteError(data.message ?? `Error ${res.status}`);
@@ -529,11 +530,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                             : item.nextDue;
                           setItems((cur) => cur.map((i) => i.id === item.id ? { ...i, frequency: next, nextDue } : i));
                           try {
-                            const isGrouped = isGroupedBillId(item.id);
-                            const url = isGrouped && sectionAccount && sectionListType
-                              ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
-                              : `/api/bills/${item.id}`;
-                            const ok = (await fetch(url, {
+                            const url = billPatchUrl(item, sectionCtx);
+                            const ok = (await billsApiFetch(url, {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({ frequency: next, nextDue }),
@@ -608,8 +606,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                         );
                       }
 
-                      const dueDate = new Date(item.nextDue);
-                      const isOverdue = dueDate < today;
+                      const dueDate = parseFlexibleDate(item.nextDue);
+                      const isOverdue = !Number.isNaN(dueDate.getTime()) && dueDate < today;
                       const dueDateStr = formatDateForDue(item.nextDue, item.frequency);
                       const dateColor = isOverdue
                         ? "text-red-600 dark:text-red-400"
@@ -657,7 +655,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                         const dueBy = cycle.nextCycleDate;
                         inPaycheck = dueBy <= paycheckEnd;
                       } else if (item.nextDue) {
-                        inPaycheck = new Date(item.nextDue) <= paycheckEnd;
+                        inPaycheck = parseFlexibleDate(item.nextDue) <= paycheckEnd;
                       }
                       return inPaycheck ? (
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
@@ -924,13 +922,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const item = dateEditModal.item;
                       const prev = item.nextDue;
                       try {
-                        const isGrouped = isGroupedBillId(item.id);
-                        const endpoint = isGrouped && sectionAccount && sectionListType
-                          ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
-                          : isGrouped
-                            ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
-                            : `/api/bills/${item.id}`;
-                        const res = await fetch(endpoint, {
+                        const endpoint = billDatePatchUrl(item, sectionCtx);
+                        const res = await billsApiFetch(endpoint, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ nextDue }),
@@ -940,8 +933,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                           setDateEditModal(null);
                           router.refresh();
                         } else {
-                          const data = (await res.json().catch(() => ({}))) as { message?: string };
-                          setDateEditError(data.message ?? `Could not save date (${res.status}).`);
+                          setDateEditError(await billsApiErrorMessage(res));
                           setItems((cur) => cur.map((i) => (i.id === item.id ? { ...i, nextDue: prev } : i)));
                         }
                       } catch {
@@ -964,13 +956,8 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       const item = dateEditModal.item;
                       const prev = item.nextDue;
                       try {
-                        const isGrouped = isGroupedBillId(item.id);
-                        const endpoint = isGrouped && sectionAccount && sectionListType
-                          ? `/api/bills/update-by-name?name=${encodeURIComponent(item.name)}&account=${encodeURIComponent(sectionAccount)}&listType=${encodeURIComponent(sectionListType)}`
-                          : isGrouped
-                            ? `/api/bills/clear-due?name=${encodeURIComponent(item.name)}`
-                            : `/api/bills/${item.id}`;
-                        const res = await fetch(endpoint, {
+                        const endpoint = billDatePatchUrl(item, sectionCtx);
+                        const res = await billsApiFetch(endpoint, {
                           method: "PATCH",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ nextDue: "" }),
@@ -1139,7 +1126,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                       setAddBillSaving(true);
                       setAddBillError(null);
                       try {
-                        const res = await fetch("/api/bills", {
+                        const res = await billsApiFetch("/api/bills", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({

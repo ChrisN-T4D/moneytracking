@@ -54,8 +54,8 @@ import {
   expectedPaychecksThisMonthDetail,
   computeMoneyStatus,
   getNextAutoTransferInByAccount,
-  getUpcomingTransfersOutOfChecking,
   transferredThisCycleByAccount,
+  collectTransfersLeavingCheckingInRange,
   type MoneyStatusWithExtras,
   type MoneyStatusExtras,
 } from "@/lib/summaryCalculations";
@@ -136,6 +136,7 @@ export default async function Home() {
     allPayDatesWithinMonthRadius(configsForSchedule, today.getFullYear(), today.getMonth(), 2)
   );
   const nextPaydayYmd = nextPayday ? formatDateToYYYYMMDD(nextPayday) : null;
+  const paycheckNeededContext = { referenceDate: ref };
 
   const displayDetail = getDisplayMonthDetail(paycheckConfigs, today);
   const { displayMonth, displayMonthName, displayNextMonth, nextMonthName, payDates, paychecksThisMonth, paychecksDisplayNextMonth } =
@@ -334,7 +335,18 @@ export default async function Home() {
     spanishFork: monthlySpendingBySection.get("spanish_fork|bills") ?? 0,
   };
   const variableExpensesThisMonth = paidThisMonthByBill.get(VARIABLE_EXPENSES_BILL_KEY) ?? 0;
-  const moneyStatus = computeMoneyStatus(predictedNeed, autoTransfersMonthly, paychecksThisMonth, payDates, forMonthName, totalGoalContributions, accountBalances, paidThisMonthByAccount, variableExpensesThisMonth);
+  const moneyStatus = computeMoneyStatus(
+    predictedNeed,
+    autoTransfersMonthly,
+    paychecksThisMonth,
+    payDates,
+    forMonthName,
+    totalGoalContributions,
+    accountBalances,
+    paidThisMonthByAccount,
+    variableExpensesThisMonth,
+    incomeForDisplayMonth
+  );
 
   // Groceries & Gas: $250 per paycheck; remaining = 250 - spent in current pay period (biweekly)
   const GROCERIES_AND_GAS_PER_PAYCHECK = 250;
@@ -395,11 +407,13 @@ export default async function Home() {
         ...resolvedCheckingAccountBills.map((b) => ({ ...b, account: "checking_account" as const })),
         ...resolvedCheckingAccountSubs.map((b) => ({ ...b, account: "checking_account" as const })),
       ];
-  const requiredThisPaycheckByAccount = requiredThisPaycheckByAccountFromBills(
+  const requiredThisPaycheckByAccountRaw = requiredThisPaycheckByAccountFromBills(
     billsWithAccountForPaycheck,
     hasPb ? spanishForkPb : resolvedSpanishForkBills,
-    nextPaydayYmd
+    nextPaydayYmd,
+    paycheckNeededContext
   );
+  const requiredThisPaycheckByAccount = requiredThisPaycheckByAccountRaw;
   // Actual paid last month by account (from tagged statements)
   const paidLastMonthByAccount = { bills: 0, checking: 0, spanishFork: 0 };
   if (hasPb && statements.length > 0 && tagRules.length > 0) {
@@ -439,7 +453,7 @@ export default async function Home() {
   // Upcoming bills (in this paycheck) for chart display
   const upcomingBills: { date: string; name: string; amount: number; account?: string }[] = [];
   for (const b of billsWithAccountForPaycheck) {
-    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd) || !b.nextDue) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd, paycheckNeededContext) || !b.nextDue) continue;
     upcomingBills.push({
       date: b.nextDue,
       name: (b as { name?: string }).name ?? "Bill",
@@ -448,7 +462,7 @@ export default async function Home() {
     });
   }
   for (const b of (hasPb ? spanishForkPb : resolvedSpanishForkBills)) {
-    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd) || !b.nextDue) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd, paycheckNeededContext) || !b.nextDue) continue;
     upcomingBills.push({
       date: b.nextDue,
       name: (b as { name?: string }).name ?? "SF",
@@ -486,14 +500,29 @@ export default async function Home() {
 
   const leftoverPerPaycheck = payDates.length > 0 ? moneyStatus.leftOverComputed / payDates.length : moneyStatus.leftOverComputed;
   const nextPaycheckEntry = nextPayDateIndex >= 0 ? payDates[nextPayDateIndex] : null;
-  // Extra this paycheck = next paycheck − auto transfers out − bills (checking) − goals share − variable share
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const paycheckWindowEnd = (() => {
+    if (nextPayday) {
+      return new Date(nextPayday.getFullYear(), nextPayday.getMonth(), nextPayday.getDate());
+    }
+    return nextPaycheckEntry?.date ?? null;
+  })();
+  let transfersOutUntilNextPaycheck = 0;
+  let upcomingTransfersOutOfChecking: import("@/lib/summaryCalculations").UpcomingTransferOut[] = [];
+  if (paycheckWindowEnd && paycheckWindowEnd >= todayStart) {
+    const allOut = collectTransfersLeavingCheckingInRange(transfersForAuto, todayStart, paycheckWindowEnd, {
+      funMoney: true,
+    });
+    transfersOutUntilNextPaycheck = allOut.total;
+    upcomingTransfersOutOfChecking = allOut.details;
+  }
+  // Extra this paycheck = next paycheck − checking bills − all transfers leaving checking − goals − variable
   const variableSharePerPaycheck = payDates.length > 0 ? variableExpensesThisMonth / payDates.length : 0;
   const extraThisPaycheck =
     nextPaycheckEntry && requiredThisPaycheckByAccount
       ? nextPaycheckEntry.amount -
         (requiredThisPaycheckByAccount.checkingAccount ?? 0) -
-        (nextBillsInflow?.amount ?? 0) -
-        (nextSpanishForkInflow?.amount ?? 0) -
+        transfersOutUntilNextPaycheck -
         goalSharePerPaycheck -
         variableSharePerPaycheck
       : undefined;
@@ -511,11 +540,6 @@ export default async function Home() {
     (paidThisMonthByBill.get("checking_account|bills|groceries") ?? 0) +
     (paidThisMonthByBill.get("checking_account|bills|gas") ?? 0) +
     (paidThisMonthByBill.get("checking_account|bills|groceries & gas") ?? 0);
-
-  const upcomingTransfersOutOfChecking =
-    nextPaycheckEntry?.date != null
-      ? getUpcomingTransfersOutOfChecking(transfersForAuto, today, nextPaycheckEntry.date)
-      : [];
 
   const extras: MoneyStatusExtras = {
     incomeNextMonth,
@@ -546,6 +570,7 @@ export default async function Home() {
     todayDate: today,
     upcomingBills,
     upcomingTransfersOutOfChecking,
+    transfersOutUntilNextPaycheck,
     autoTransfers: transfersForAuto,
     transferredThisCycleBonus,
   };
@@ -704,10 +729,7 @@ function MainContent({
                   },
                   nextBillsInflowAmount: moneyStatus.nextBillsInflow?.amount ?? 0,
                   nextSpanishForkInflowAmount: moneyStatus.nextSpanishForkInflow?.amount ?? 0,
-                  transfersOutOfCheckingTotal: (moneyStatus.upcomingTransfersOutOfChecking ?? []).reduce(
-                    (s, t) => s + t.amount,
-                    0
-                  ),
+                  transfersOutOfCheckingTotal: moneyStatus.transfersOutUntilNextPaycheck ?? 0,
                 }}
               />
             }

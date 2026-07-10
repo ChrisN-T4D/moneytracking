@@ -22,6 +22,9 @@ export function recurringCycleKeyForExpense(
 ): string {
   const f = (frequency ?? "").toLowerCase().replace(/\s/g, "");
   if (f === "monthly") {
+    const y = occurrenceYmd.slice(0, 4);
+    const mo = occurrenceYmd.slice(5, 7);
+    if (y && mo) return `m:${y}-${mo}`;
     return `m:${viewMonthKey(viewYear, viewMonthIndex)}`;
   }
   if (f === "yearly") {

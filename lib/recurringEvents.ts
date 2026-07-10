@@ -24,6 +24,7 @@ import { spanishForkMortgageDisplayName } from "./mortgageBillNames";
 import { goalsForBillName, creditAmountForMarkPaid } from "./goalRouting";
 import { expectedPaychecksThisMonthDetail, allPayDatesNearMonth } from "./summaryCalculations";
 import { parseFlexibleDate, getNextAutoTransferDate } from "./paycheckDates";
+import { effectivePaycheckAmount } from "./paycheckAmountOverride";
 import {
   recurringCycleKeyForExpense,
   isManualRecurringPaidForKey,
@@ -68,40 +69,7 @@ function recurrenceLabel(freq: string): string {
   return freq;
 }
 
-/**
- * Get all bill due-date occurrences that fall within year/month.
- * For monthly bills the nextDue gives one date; for 2-week bills we walk the cycle.
- */
-function billDatesInMonth(bill: BillOrSub, year: number, month: number): string[] {
-  const first = new Date(year, month, 1);
-  const last = new Date(year, month + 1, 0);
-  const results: string[] = [];
-
-  if (!bill.nextDue) return results;
-  const due = parseFlexibleDate(bill.nextDue);
-  if (Number.isNaN(due.getTime())) return results;
-
-  const freq = (bill.frequency ?? "monthly").toLowerCase();
-  if (freq === "2weeks") {
-    const d = new Date(due.getTime());
-    while (d > last) d.setDate(d.getDate() - 14);
-    while (d < first) d.setDate(d.getDate() + 14);
-    while (d <= last) {
-      if (d >= first) results.push(toYMD(d));
-      d.setDate(d.getDate() + 14);
-    }
-  } else if (freq === "yearly") {
-    if (due.getMonth() === month && due >= first && due <= last) {
-      results.push(toYMD(due));
-    }
-  } else {
-    const day = due.getDate();
-    const clampedDay = Math.min(day, last.getDate());
-    const d = new Date(year, month, clampedDay);
-    results.push(toYMD(d));
-  }
-  return results;
-}
+import { billDatesInMonth } from "./billOccurrenceDates";
 
 /** Normalize AutoTransfer.account to canonical key (bills_account, spanish_fork, or leave as-is for checking/other). */
 function transferDestinationAccount(t: AutoTransfer): string {
@@ -131,7 +99,8 @@ export function buildRecurringEvents(
   autoTransfers: AutoTransfer[],
   year: number,
   month: number,
-  goals: Pick<MoneyGoal, "id" | "name" | "category">[] = []
+  goals: Pick<MoneyGoal, "id" | "name" | "category">[] = [],
+  nextPaydayYmd?: string | null
 ): RecurringEvent[] {
   const events: RecurringEvent[] = [];
   const refDate = new Date(year, month, 1);
@@ -188,13 +157,17 @@ export function buildRecurringEvents(
           isPaid && goalForApplied
             ? creditAmountForMarkPaid(membersForCredit, goalForApplied, item.amount)
             : 0;
+        const lineAmount =
+          nextPaydayYmd != null
+            ? members.reduce((s, m) => s + effectivePaycheckAmount(m, nextPaydayYmd), 0)
+            : item.amount;
         events.push({
           id: `bill-${account}-${listType}-${d}-${item.name.replace(/\s/g, "-")}`,
           date: d,
           type: "expense",
           account,
           name: item.name,
-          amount: item.amount,
+          amount: lineAmount,
           recurrence: recurrenceLabel(item.frequency),
           isPaid,
           manualPaid: {
@@ -203,7 +176,7 @@ export function buildRecurringEvents(
             ids,
             goalCandidates: candidates.map((c) => ({ id: c.id, name: c.name })),
             membersForCredit,
-            lineAmount: item.amount,
+            lineAmount,
             storedGoalId: storedGid,
             storedStatementId: storedStmt,
             appliedCreditAmount,
@@ -253,13 +226,14 @@ export function buildRecurringEvents(
         isPaid && sfGoalForApplied
           ? creditAmountForMarkPaid(sfCreditMembers, sfGoalForApplied, b.amount)
           : 0;
+      const sfAmount = effectivePaycheckAmount(b, nextPaydayYmd);
       events.push({
         id: `sf-${b.id}-${d}`,
         date: d,
         type: "expense",
         account: "spanish_fork",
         name: sfDisplayName,
-        amount: b.amount,
+        amount: sfAmount,
         recurrence: recurrenceLabel(b.frequency),
         isPaid,
         manualPaid: {
@@ -268,7 +242,7 @@ export function buildRecurringEvents(
           ids: [b.id],
           goalCandidates: sfCandidates.map((c) => ({ id: c.id, name: c.name })),
           membersForCredit: sfCreditMembers,
-          lineAmount: b.amount,
+          lineAmount: sfAmount,
           storedGoalId: storedGid,
           storedStatementId: storedStmt,
           appliedCreditAmount: sfAppliedCredit,

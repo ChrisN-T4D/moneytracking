@@ -21,9 +21,8 @@ function calendarDayKey(d: Date): number {
 }
 
 /**
- * Find the next pay date strictly after `referenceDate` from a list of all pay dates,
- * and return the day before it as the exclusive end of "this paycheck" window.
- * Bills due on or after the next pay date belong to the next cycle, not this one.
+ * Find the next pay date strictly after `referenceDate` from a list of all pay dates.
+ * The paycheck planning window runs through that date inclusive (bills/events after it belong to the next cycle).
  */
 export function getNextPaydayFromSchedule(
   referenceDate: Date,
@@ -326,9 +325,19 @@ export function getNextDueAndPaycheck(
   let nextDay: Date;
   let nextDue: string;
 
-  if (!Number.isNaN(stored.getTime()) && toLocalDay(stored) < ref && !Number.isNaN(rolled.getTime())) {
-    nextDay = toLocalDay(stored);
-    nextDue = formatDateToYYYYMMDD(nextDay);
+  if (!Number.isNaN(stored.getTime())) {
+    const storedDay = toLocalDay(stored);
+    // Respect PocketBase nextDue when on or after today (user-edited or scheduled).
+    if (storedDay >= ref) {
+      nextDay = storedDay;
+      nextDue = formatDateToYYYYMMDD(nextDay);
+    } else if (!Number.isNaN(rolled.getTime())) {
+      // Overdue: roll to next occurrence for display; future saved dates stay as-is above.
+      nextDay = toLocalDay(rolled);
+      nextDue = formatDateToYYYYMMDD(nextDay);
+    } else {
+      return { nextDue: trimmed || formatDateToYYYYMMDD(ref), inThisPaycheck: false };
+    }
   } else if (!Number.isNaN(rolled.getTime())) {
     nextDay = toLocalDay(rolled);
     nextDue = formatDateToYYYYMMDD(nextDay);

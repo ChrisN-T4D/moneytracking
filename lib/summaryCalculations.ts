@@ -5,6 +5,8 @@
 
 import type { BillOrSub, AutoTransfer, SpanishForkBill, PaycheckConfig } from "./types";
 import { normalizeKeyForGrouping } from "./pocketbase";
+import { effectivePaycheckAmount, hasActivePaycheckAmountOverride } from "./paycheckAmountOverride";
+import { billOccurrenceDatesInRange } from "./billOccurrenceDates";
 import { parseFlexibleDate, getNextThursdayOnOrAfter, getNextAutoTransferDate, getNextDueAndPaycheck, formatDateToYYYYMMDD } from "./paycheckDates";
 
 /** Same bill can exist twice in PocketBase (e.g. checking "bills" + "subscriptions" lists); merge for paycheck need math. */
@@ -49,20 +51,42 @@ export function predictedNeedByAccountFromLists(
 
 /** Predicted need from PocketBase billsWithMeta + sections (bills_list) + spanishFork list */
 export function predictedNeedByAccountFromPb(
-  billsWithMeta: { account?: string; listType?: string; amount: number; frequency: string }[],
-  spanishForkBills: { amount: number; frequency: string }[]
+  billsWithMeta: { account?: string; listType?: string; name?: string; amount: number; frequency: string }[],
+  spanishForkBills: { name?: string; amount: number; frequency: string }[]
 ): PredictedNeedByAccount {
+  const mergedBills = new Map<string, { account: string; amount: number; frequency: string }>();
+  for (const b of billsWithMeta) {
+    const account = (b.account ?? "").trim();
+    const name = (b.name ?? "").trim() || "Bill";
+    const k = paycheckNeedKey(account, name);
+    const prev = mergedBills.get(k);
+    const amt = Number(b.amount) || 0;
+    if (prev) prev.amount += amt;
+    else mergedBills.set(k, { account, amount: amt, frequency: b.frequency });
+  }
   let billsAccount = 0;
   let checkingAccount = 0;
-  for (const b of billsWithMeta) {
-    const m = monthlyEquivalent(b.amount, b.frequency);
-    if (b.account === "bills_account") billsAccount += m;
-    else if (b.account === "checking_account") checkingAccount += m;
+  for (const row of mergedBills.values()) {
+    const m = monthlyEquivalent(row.amount, row.frequency);
+    if (row.account === "bills_account") billsAccount += m;
+    else if (row.account === "checking_account") checkingAccount += m;
+  }
+  const mergedSf = new Map<string, { amount: number; frequency: string }>();
+  for (const b of spanishForkBills) {
+    const k = normalizeKeyForGrouping((b.name ?? "").trim() || "Bill");
+    const prev = mergedSf.get(k);
+    const amt = Number(b.amount) || 0;
+    if (prev) prev.amount += amt;
+    else mergedSf.set(k, { amount: amt, frequency: b.frequency });
+  }
+  let spanishFork = 0;
+  for (const row of mergedSf.values()) {
+    spanishFork += monthlyEquivalent(row.amount, row.frequency);
   }
   return {
     billsAccount,
     checkingAccount,
-    spanishFork: sumMonthlyNeed(spanishForkBills),
+    spanishFork,
   };
 }
 
@@ -233,28 +257,51 @@ export interface UpcomingTransferOut {
   amount: number;
 }
 
+/** All scheduled transfers that leave joint checking in [fromDate, toDate] (every occurrence). */
+export function collectTransfersLeavingCheckingInRange(
+  transfers: AutoTransfer[],
+  fromDate: Date,
+  toDate: Date,
+  options?: { funMoney?: boolean }
+): { details: UpcomingTransferOut[]; total: number } {
+  const from = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+  const to = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate());
+  const includeFunMoney = options?.funMoney !== false;
+  const details: UpcomingTransferOut[] = [];
+
+  for (const t of transfers) {
+    if (t.transferredThisCycle) continue;
+    const bucket = classifyAutoTransferAccount(t.account ?? "", t.whatFor ?? "");
+    if (bucket === "out" && !includeFunMoney) continue;
+    if (bucket !== "bills" && bucket !== "spanishFork" && bucket !== "out") continue;
+
+    let ref = new Date(from.getTime());
+    while (ref <= to) {
+      const next = getNextAutoTransferDate(t.date ?? "", t.frequency ?? "", ref);
+      if (Number.isNaN(next.getTime()) || next > to) break;
+      if (next >= from) {
+        details.push({
+          date: new Date(next.getFullYear(), next.getMonth(), next.getDate()),
+          name: t.whatFor ?? "Transfer",
+          amount: t.amount ?? 0,
+        });
+      }
+      ref = new Date(next.getTime());
+      ref.setDate(ref.getDate() + 1);
+    }
+  }
+  details.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return { details, total: details.reduce((s, x) => s + x.amount, 0) };
+}
+
 export function getUpcomingTransfersOutOfChecking(
   transfers: AutoTransfer[],
   fromDate: Date,
   toDate: Date
 ): UpcomingTransferOut[] {
-  const from = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
-  const to = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate());
-  const result: UpcomingTransferOut[] = [];
-  for (const t of transfers) {
-    if (t.transferredThisCycle) continue;
-    const bucket = classifyAutoTransferAccount(t.account ?? "", t.whatFor ?? "");
-    if (bucket !== "bills" && bucket !== "spanishFork") continue;
-    const next = getNextAutoTransferDate(t.date ?? "", t.frequency ?? "", from);
-    if (Number.isNaN(next.getTime()) || next < from || next > to) continue;
-    result.push({
-      date: new Date(next.getFullYear(), next.getMonth(), next.getDate()),
-      name: t.whatFor ?? "Transfer",
-      amount: t.amount,
-    });
-  }
-  result.sort((a, b) => a.date.getTime() - b.date.getTime());
-  return result;
+  return collectTransfersLeavingCheckingInRange(transfers, fromDate, toDate, {
+    funMoney: false,
+  }).details;
 }
 
 /** Bill names that are variable/discretionary (groceries & gas budget) — excluded from "needed before next paycheck". */
@@ -267,20 +314,46 @@ function isVariableOrGroceriesBill(name: string | undefined): boolean {
   return n.length > 0 && VARIABLE_BILL_NAMES.has(n);
 }
 
+/** Context for paycheck-window bill filtering (reference = today for "today through next payday"). */
+export type PaycheckNeededContext = {
+  referenceDate?: Date;
+};
+
+function todayYmdFromReference(referenceDate: Date): string {
+  const d = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
+  return formatDateToYYYYMMDD(d);
+}
+
 /**
  * Whether a bill counts for "needed before next paycheck".
- * Simple rule: if we know the next payday, any bill with nextDue >= that date is excluded.
- * Bills due before today that haven't been marked paid (inThisPaycheck still true) remain included.
+ * Only bills with nextDue from today through next payday (inclusive).
  */
 export function billIncludedForNeededBeforePaycheck(
-  bill: { nextDue?: string; inThisPaycheck?: boolean },
-  nextPaydayYmd: string | null | undefined
+  bill: {
+    nextDue?: string;
+    inThisPaycheck?: boolean;
+    frequency?: string;
+    recurringPaidCycle?: string | null;
+  },
+  nextPaydayYmd: string | null | undefined,
+  context?: PaycheckNeededContext
 ): boolean {
-  if (!(bill.inThisPaycheck ?? false)) return false;
+  if (!nextPaydayYmd) return bill.inThisPaycheck ?? false;
+
+  const todayYmd = todayYmdFromReference(context?.referenceDate ?? new Date());
+  const occurrences = billOccurrenceDatesInRange(bill, todayYmd, nextPaydayYmd);
+  return occurrences.length > 0;
+}
+
+/** Whether a calendar date (YYYY-MM-DD) falls from today through next payday inclusive. */
+export function isDateInPaycheckWindow(
+  dateYmd: string,
+  nextPaydayYmd: string | null | undefined,
+  referenceDate?: Date
+): boolean {
   if (!nextPaydayYmd) return true;
-  const d = (bill.nextDue ?? "").trim().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
-  return d < nextPaydayYmd;
+  const todayYmd = todayYmdFromReference(referenceDate ?? new Date());
+  return dateYmd >= todayYmd && dateYmd <= nextPaydayYmd;
 }
 
 /** Sum predicted need for items where inThisPaycheck is true (by account).
@@ -296,16 +369,34 @@ export function requiredThisPaycheckByAccountFromBills(
     frequency: string;
     nextDue?: string;
     inThisPaycheck?: boolean;
+    recurringPaidCycle?: string | null;
+    paycheckAmountOverride?: number | null;
+    paycheckAmountOverrideFor?: string | null;
   }[],
-  spanishForkBills: { name?: string; amount: number; frequency: string; nextDue?: string; inThisPaycheck?: boolean }[],
-  nextPaydayYmd?: string | null
+  spanishForkBills: {
+    name?: string;
+    amount: number;
+    frequency: string;
+    nextDue?: string;
+    inThisPaycheck?: boolean;
+    recurringPaidCycle?: string | null;
+    paycheckAmountOverride?: number | null;
+    paycheckAmountOverrideFor?: string | null;
+  }[],
+  nextPaydayYmd?: string | null,
+  context?: PaycheckNeededContext
 ): PredictedNeedByAccount {
   const mergedChecking = new Map<string, number>();
   const mergedBills = new Map<string, number>();
+  const todayYmd = todayYmdFromReference(context?.referenceDate ?? new Date());
   for (const b of billsWithMeta) {
-    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd, context)) continue;
     if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
-    const m = Number(b.amount) || 0;
+    const occCount =
+      nextPaydayYmd != null
+        ? billOccurrenceDatesInRange(b, todayYmd, nextPaydayYmd).length
+        : 1;
+    const m = effectivePaycheckAmount(b, nextPaydayYmd) * occCount;
     const name = (b.name ?? "").trim() || "Bill";
     if (b.account === "bills_account") {
       const k = paycheckNeedKey("bills_account", name);
@@ -320,16 +411,27 @@ export function requiredThisPaycheckByAccountFromBills(
 
   const mergedSf = new Map<string, number>();
   for (const b of spanishForkBills) {
-    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd, context)) continue;
+    const occCount =
+      nextPaydayYmd != null
+        ? billOccurrenceDatesInRange(b, todayYmd, nextPaydayYmd).length
+        : 1;
     const name = (b.name ?? "").trim() || "Bill";
     const k = normalizeKeyForGrouping(name);
-    mergedSf.set(k, (mergedSf.get(k) ?? 0) + (Number(b.amount) || 0));
+    mergedSf.set(k, (mergedSf.get(k) ?? 0) + effectivePaycheckAmount(b, nextPaydayYmd) * occCount);
   }
   const spanishFork = [...mergedSf.values()].reduce((s, v) => s + v, 0);
   return { billsAccount, checkingAccount, spanishFork };
 }
 
-/** Per-account lists of recurring items that make up "needed before next paycheck" (same filters as requiredThisPaycheckByAccountFromBills). */
+/** Per-account lists of recurring items that make up "needed before next paycheck". */
+export type NeededBeforePaycheckLine = {
+  name: string;
+  amount: number;
+  defaultAmount: number;
+  hasOverride: boolean;
+};
+
 export function getNeededBeforeNextPaycheckBreakdown(
   billsWithMeta: {
     account?: string;
@@ -338,36 +440,88 @@ export function getNeededBeforeNextPaycheckBreakdown(
     frequency: string;
     nextDue?: string;
     inThisPaycheck?: boolean;
+    recurringPaidCycle?: string | null;
+    paycheckAmountOverride?: number | null;
+    paycheckAmountOverrideFor?: string | null;
   }[],
-  spanishForkBills: { name?: string; amount: number; frequency: string; nextDue?: string; inThisPaycheck?: boolean }[],
-  nextPaydayYmd?: string | null
-): { checkingAccount: { name: string; amount: number }[]; billsAccount: { name: string; amount: number }[]; spanishFork: { name: string; amount: number }[] } {
-  type Line = { name: string; amount: number };
-  const mergeMap = (target: Map<string, Line>, account: "bills_account" | "checking_account", name: string, amount: number) => {
+  spanishForkBills: {
+    name?: string;
+    amount: number;
+    frequency: string;
+    nextDue?: string;
+    inThisPaycheck?: boolean;
+    recurringPaidCycle?: string | null;
+    paycheckAmountOverride?: number | null;
+    paycheckAmountOverrideFor?: string | null;
+  }[],
+  nextPaydayYmd?: string | null,
+  context?: PaycheckNeededContext
+): {
+  checkingAccount: NeededBeforePaycheckLine[];
+  billsAccount: NeededBeforePaycheckLine[];
+  spanishFork: NeededBeforePaycheckLine[];
+} {
+  type Line = NeededBeforePaycheckLine;
+  const todayYmd = todayYmdFromReference(context?.referenceDate ?? new Date());
+  const mergeMap = (
+    target: Map<string, Line>,
+    account: "bills_account" | "checking_account",
+    name: string,
+    bill: {
+      amount: number;
+      frequency?: string;
+      nextDue?: string;
+      paycheckAmountOverride?: number | null;
+      paycheckAmountOverrideFor?: string | null;
+    },
+    occCount: number
+  ) => {
     const k = paycheckNeedKey(account, name);
+    const effective = effectivePaycheckAmount(bill, nextPaydayYmd) * occCount;
+    const defaultAmt = (Number(bill.amount) || 0) * occCount;
+    const overridden = hasActivePaycheckAmountOverride(bill, nextPaydayYmd);
     const prev = target.get(k);
-    if (prev) prev.amount += amount;
-    else target.set(k, { name, amount });
+    if (prev) {
+      prev.amount += effective;
+      prev.defaultAmount += defaultAmt;
+      prev.hasOverride = prev.hasOverride || overridden;
+    } else {
+      target.set(k, { name, amount: effective, defaultAmount: defaultAmt, hasOverride: overridden });
+    }
   };
   const checkingM = new Map<string, Line>();
   const billsM = new Map<string, Line>();
   for (const b of billsWithMeta) {
-    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd, context)) continue;
     if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
-    const m = Number(b.amount) || 0;
+    const occCount =
+      nextPaydayYmd != null
+        ? billOccurrenceDatesInRange(b, todayYmd, nextPaydayYmd).length
+        : 1;
     const name = (b.name ?? "").trim() || "Bill";
-    if (b.account === "bills_account") mergeMap(billsM, "bills_account", name, m);
-    else if (b.account === "checking_account") mergeMap(checkingM, "checking_account", name, m);
+    if (b.account === "bills_account") mergeMap(billsM, "bills_account", name, b, occCount);
+    else if (b.account === "checking_account") mergeMap(checkingM, "checking_account", name, b, occCount);
   }
   const spanishM = new Map<string, Line>();
   for (const b of spanishForkBills) {
-    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd)) continue;
+    if (!billIncludedForNeededBeforePaycheck(b, nextPaydayYmd, context)) continue;
+    const occCount =
+      nextPaydayYmd != null
+        ? billOccurrenceDatesInRange(b, todayYmd, nextPaydayYmd).length
+        : 1;
     const name = (b.name ?? "").trim() || "Bill";
-    const m = Number(b.amount) || 0;
     const k = normalizeKeyForGrouping(name);
+    const effective = effectivePaycheckAmount(b, nextPaydayYmd) * occCount;
+    const defaultAmt = (Number(b.amount) || 0) * occCount;
+    const overridden = hasActivePaycheckAmountOverride(b, nextPaydayYmd);
     const prev = spanishM.get(k);
-    if (prev) prev.amount += m;
-    else spanishM.set(k, { name, amount: m });
+    if (prev) {
+      prev.amount += effective;
+      prev.defaultAmount += defaultAmt;
+      prev.hasOverride = prev.hasOverride || overridden;
+    } else {
+      spanishM.set(k, { name, amount: effective, defaultAmount: defaultAmt, hasOverride: overridden });
+    }
   }
   return {
     checkingAccount: [...checkingM.values()],
@@ -388,6 +542,7 @@ export function requiredForPayPeriodEnd(
     recurringPaidCycle?: string | null;
   }[],
   spanishForkBills: {
+    name?: string;
     nextDue?: string;
     amount: number;
     frequency: string;
@@ -400,7 +555,9 @@ export function requiredForPayPeriodEnd(
   const start = new Date(end);
   start.setDate(start.getDate() - 14);
   const startStr = formatDateToYYYYMMDD(start);
-  let total = 0;
+  const mergedBills = new Map<string, number>();
+  const mergedChecking = new Map<string, number>();
+  const mergedSf = new Map<string, number>();
   for (const b of billsWithMeta) {
     if (b.account === "checking_account" && isVariableOrGroceriesBill(b.name)) continue;
     const ctx = {
@@ -415,8 +572,15 @@ export function requiredForPayPeriodEnd(
       ctx
     );
     if (!inThisPaycheck) continue;
-    if (b.account === "bills_account") total += b.amount;
-    else if (b.account === "checking_account") total += b.amount;
+    const name = (b.name ?? "").trim() || "Bill";
+    const amt = Number(b.amount) || 0;
+    if (b.account === "bills_account") {
+      const k = paycheckNeedKey("bills_account", name);
+      mergedBills.set(k, (mergedBills.get(k) ?? 0) + amt);
+    } else if (b.account === "checking_account") {
+      const k = paycheckNeedKey("checking_account", name);
+      mergedChecking.set(k, (mergedChecking.get(k) ?? 0) + amt);
+    }
   }
   for (const b of spanishForkBills) {
     const ctx = {
@@ -430,8 +594,14 @@ export function requiredForPayPeriodEnd(
       end,
       ctx
     );
-    if (inThisPaycheck) total += b.amount;
+    if (!inThisPaycheck) continue;
+    const k = normalizeKeyForGrouping((b.name ?? "").trim() || "Bill");
+    mergedSf.set(k, (mergedSf.get(k) ?? 0) + (Number(b.amount) || 0));
   }
+  let total = 0;
+  for (const v of mergedBills.values()) total += v;
+  for (const v of mergedChecking.values()) total += v;
+  for (const v of mergedSf.values()) total += v;
   return total;
 }
 
@@ -684,6 +854,8 @@ export interface MoneyStatusExtras {
   upcomingBills?: { date: string; name: string; amount: number; account?: string }[];
   /** Transfers out of Checking (to Bills/SF) in this paycheck window (for chart "Out" list). */
   upcomingTransfersOutOfChecking?: UpcomingTransferOut[];
+  /** All transfers leaving checking until next paycheck (includes fun money; every schedule hit in window). */
+  transfersOutUntilNextPaycheck?: number;
   /** Auto transfers with transferredThisCycle for "this cycle" status section. */
   autoTransfers?: AutoTransfer[];
   /** Extra amount to add to Bills/Spanish Fork balance when transfer marked done this cycle (so predicted amount reflects it). */

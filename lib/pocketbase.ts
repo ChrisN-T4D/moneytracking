@@ -174,6 +174,8 @@ interface PbBill {
   recurringPaidCycle?: string | null;
   recurringPaidGoalId?: string | null;
   recurringPaidStatementId?: string | null;
+  paycheckAmountOverride?: number | null;
+  paycheckAmountOverrideFor?: string | null;
 }
 
 function parseFrequency(s: string | undefined): Frequency {
@@ -191,6 +193,12 @@ function parseBill(
   const recurringPaid = (item.recurringPaidCycle ?? "").trim() || null;
   const recurringGoal = (item.recurringPaidGoalId ?? "").trim() || null;
   const recurringStmt = (item.recurringPaidStatementId ?? "").trim() || null;
+  const paycheckOverrideFor = (item.paycheckAmountOverrideFor ?? "").trim() || null;
+  const paycheckOverrideRaw = item.paycheckAmountOverride;
+  const paycheckOverride =
+    paycheckOverrideRaw === null || paycheckOverrideRaw === undefined
+      ? null
+      : Number(paycheckOverrideRaw);
   if (!rawNextDue) {
     return {
       id: item.id,
@@ -204,6 +212,8 @@ function parseBill(
       recurringPaidCycle: recurringPaid,
       recurringPaidGoalId: recurringGoal,
       recurringPaidStatementId: recurringStmt,
+      paycheckAmountOverride: paycheckOverride,
+      paycheckAmountOverrideFor: paycheckOverrideFor,
     };
   }
   const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
@@ -228,10 +238,12 @@ function parseBill(
     recurringPaidCycle: recurringPaid,
     recurringPaidGoalId: recurringGoal,
     recurringPaidStatementId: recurringStmt,
+    paycheckAmountOverride: paycheckOverride,
+    paycheckAmountOverrideFor: paycheckOverrideFor,
   };
 }
 
-// Store account/listType on parsed items for filtering (PocketBase fields preserved in extended type)
+// Store account/listType on parsed items
 export type BillOrSubWithMeta = BillOrSub & { account?: string; listType?: string; subsection?: string | null };
 
 /** Fetch all bills/subscriptions from PocketBase (with account/listType for section filtering). */
@@ -425,6 +437,8 @@ interface PbSpanishForkBill {
   recurringPaidCycle?: string | null;
   recurringPaidGoalId?: string | null;
   recurringPaidStatementID?: string | null;
+  paycheckAmountOverride?: number | null;
+  paycheckAmountOverrideFor?: string | null;
 }
 
 /** Fetch Spanish Fork bills from PocketBase. Returns [] if URL not set or request fails. */
@@ -456,6 +470,12 @@ export async function getSpanishForkBills(
     const ref = getTodayUTC();
     return (data.items ?? []).map((item) => {
       const recurringPaid = (item.recurringPaidCycle ?? "").trim() || null;
+      const paycheckOverrideFor = (item.paycheckAmountOverrideFor ?? "").trim() || null;
+      const paycheckOverrideRaw = item.paycheckAmountOverride;
+      const paycheckOverride =
+        paycheckOverrideRaw === null || paycheckOverrideRaw === undefined
+          ? null
+          : Number(paycheckOverrideRaw);
       const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
         item.nextDue ?? "",
         item.frequency ?? "monthly",
@@ -477,6 +497,8 @@ export async function getSpanishForkBills(
         recurringPaidCycle: recurringPaid,
         recurringPaidGoalId: (item.recurringPaidGoalId ?? "").trim() || null,
         recurringPaidStatementId: (item.recurringPaidStatementID ?? "").trim() || null,
+        paycheckAmountOverride: paycheckOverride,
+        paycheckAmountOverrideFor: paycheckOverrideFor,
       };
     });
   } catch {

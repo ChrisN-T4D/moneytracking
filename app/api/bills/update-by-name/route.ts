@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPbBase, getTokenFromCookie } from "@/lib/pocketbase-auth";
-import { getAdminToken } from "@/lib/pocketbase-setup";
+import { getPbBase, getPbWriteToken } from "@/lib/pocketbase-auth";
 import { oklahomaMortgagePocketBaseNameVariants, pocketBaseBillsFilterByNamesAndSection } from "@/lib/mortgageBillNames";
 
 export const dynamic = "force-dynamic";
@@ -58,27 +57,19 @@ export async function PATCH(request: Request) {
     );
   }
 
-  let token: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
-  let resolvedBase = base.replace(/\/$/, "");
-  if (!token) {
-    const apiBase = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
-    try {
-      const r = await getAdminToken(apiBase, process.env.POCKETBASE_ADMIN_EMAIL ?? "", process.env.POCKETBASE_ADMIN_PASSWORD ?? "");
-      token = r.token;
-      resolvedBase = r.baseUrl.replace(/\/$/, "");
-    } catch {
-      return NextResponse.json(
-        { ok: false, message: "Sign in or set PocketBase admin credentials for grouped bill updates." },
-        { status: 401 }
-      );
-    }
+  const auth = await getPbWriteToken(base);
+  if (!auth) {
+    return NextResponse.json(
+      { ok: false, message: "Sign in or set PocketBase admin credentials for grouped bill updates." },
+      { status: 401 }
+    );
   }
 
   const nameVariants = oklahomaMortgagePocketBaseNameVariants(name);
   const filter = encodeURIComponent(pocketBaseBillsFilterByNamesAndSection(nameVariants, account, listType));
   const listRes = await fetch(
-    `${resolvedBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
-    { cache: "no-store", headers: { Authorization: `Bearer ${token}` } }
+    `${auth.apiBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
+    { cache: "no-store", headers: { Authorization: `Bearer ${auth.token}` } }
   );
   if (!listRes.ok) {
     return NextResponse.json({ ok: false, message: `Could not fetch bills: ${listRes.status}` }, { status: 502 });
@@ -92,9 +83,9 @@ export async function PATCH(request: Request) {
   const uniqueIds = [...new Set(ids)];
   let updated = 0;
   for (const id of uniqueIds) {
-    const res = await fetch(`${resolvedBase}/api/collections/bills/records/${id}`, {
+    const res = await fetch(`${auth.apiBase}/api/collections/bills/records/${id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.token}` },
       body: JSON.stringify(payload),
     });
     if (res.ok) updated++;

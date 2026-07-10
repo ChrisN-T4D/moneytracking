@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTokenFromCookie, getPbBase } from "@/lib/pocketbase-auth";
-import { getAdminToken } from "@/lib/pocketbase-setup";
+import { getPbBase, getPbWriteToken } from "@/lib/pocketbase-auth";
 import { isPbRecordId, PB } from "@/lib/pbFieldMap";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +13,8 @@ type SpanishForkBillUpdateBody = {
   recurringPaidCycle?: string | null;
   recurringPaidGoalId?: string | null;
   recurringPaidStatementID?: string | null;
+  paycheckAmountOverride?: number | null;
+  paycheckAmountOverrideFor?: string | null;
 };
 
 /** PATCH /api/spanish-fork-bills/[id] — update a Spanish Fork bill record. */
@@ -78,35 +79,42 @@ export async function PATCH(
     payload[PB.spanishForkBills.paidStatementId] =
       v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
   }
+  if (body.paycheckAmountOverride !== undefined) {
+    const v = body.paycheckAmountOverride;
+    if (v === null) {
+      payload.paycheckAmountOverride = null;
+    } else {
+      const n = Number(v);
+      if (Number.isNaN(n) || n < 0) {
+        return NextResponse.json({ ok: false, message: "paycheckAmountOverride must be non-negative or null." }, { status: 400 });
+      }
+      payload.paycheckAmountOverride = n;
+    }
+  }
+  if (body.paycheckAmountOverrideFor !== undefined) {
+    const v = body.paycheckAmountOverrideFor;
+    payload.paycheckAmountOverrideFor =
+      v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
 
   if (Object.keys(payload).length === 0) {
     return NextResponse.json({ ok: false, message: "No valid fields to update." }, { status: 400 });
   }
 
-  // Try user auth token first, fall back to admin token
-  let authToken: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
-  let apiBase = base;
-
-  if (!authToken) {
-    const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
-    const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
-    if (email && password) {
-      try {
-        const result = await getAdminToken(base, email, password);
-        authToken = result.token;
-        apiBase = result.baseUrl;
-      } catch {
-        // no token — attempt unauthenticated (collection may allow it)
-      }
-    }
+  const auth = await getPbWriteToken(base);
+  if (!auth) {
+    return NextResponse.json(
+      { ok: false, message: "Not authenticated. Sign in or set PocketBase admin credentials." },
+      { status: 401 }
+    );
   }
 
-  const url = `${apiBase.replace(/\/$/, "")}/api/collections/spanish_fork_bills/records/${id}`;
+  const url = `${auth.apiBase}/api/collections/spanish_fork_bills/records/${id}`;
   const res = await fetch(url, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      Authorization: `Bearer ${auth.token}`,
     },
     body: JSON.stringify(payload),
   });
@@ -144,30 +152,18 @@ export async function DELETE(
     return NextResponse.json({ ok: false, message: "Invalid id." }, { status: 400 });
   }
 
-  let authToken: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
-  let apiBase = base;
-  if (!authToken) {
-    const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
-    const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
-    if (email && password) {
-      try {
-        const result = await getAdminToken(base, email, password);
-        authToken = result.token;
-        apiBase = result.baseUrl;
-      } catch {}
-    }
-  }
-  if (!authToken) {
+  const auth = await getPbWriteToken(base);
+  if (!auth) {
     return NextResponse.json(
       { ok: false, message: "Not authenticated. Sign in or set PocketBase admin credentials." },
       { status: 401 }
     );
   }
 
-  const url = `${apiBase.replace(/\/$/, "")}/api/collections/spanish_fork_bills/records/${id}`;
+  const url = `${auth.apiBase}/api/collections/spanish_fork_bills/records/${id}`;
   const res = await fetch(url, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${authToken}` },
+    headers: { Authorization: `Bearer ${auth.token}` },
     cache: "no-store",
   });
   if (!res.ok) {

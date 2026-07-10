@@ -15,6 +15,10 @@ export interface BillOrSub {
   recurringPaidGoalId?: string | null;
   /** PocketBase statement id created for Recurring mark paid (cleared with cycle). */
   recurringPaidStatementId?: string | null;
+  /** One-off amount for the current paycheck round only (see paycheckAmountOverrideFor). */
+  paycheckAmountOverride?: number | null;
+  /** Paycheck key p:YYYY-MM-DD — must match next payday for override to apply. */
+  paycheckAmountOverrideFor?: string | null;
 }
 
 export interface AutoTransfer {
@@ -40,6 +44,8 @@ export interface SpanishForkBill {
   recurringPaidCycle?: string | null;
   recurringPaidGoalId?: string | null;
   recurringPaidStatementId?: string | null;
+  paycheckAmountOverride?: number | null;
+  paycheckAmountOverrideFor?: string | null;
 }
 
 export interface Summary {

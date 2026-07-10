@@ -120,3 +120,9 @@ export function pocketBaseBillsFilterByNamesAndSection(names: string[], account:
   const namePart = names.map((n) => `name="${escapePbFilterString(n)}"`).join(" || ");
   return `(${namePart}) && account="${escapePbFilterString(account)}" && listType="${escapePbFilterString(listType)}"`;
 }
+
+/** Same name matching as pocketBaseBillsFilterByNamesAndSection but any listType under account. */
+export function pocketBaseBillsFilterByNamesAndAccount(names: string[], account: string): string {
+  const namePart = names.map((n) => `name="${escapePbFilterString(n)}"`).join(" || ");
+  return `(${namePart}) && account="${escapePbFilterString(account)}"`;
+}

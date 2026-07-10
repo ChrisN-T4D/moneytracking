@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
-import { getPbBase } from "@/lib/pocketbase-auth";
-import { getAdminToken } from "@/lib/pocketbase-setup";
+import { getPbBase, getPbWriteToken } from "@/lib/pocketbase-auth";
 import { escapePbFilterString } from "@/lib/mortgageBillNames";
 
 export const dynamic = "force-dynamic";
-
-const POCKETBASE_API_URL = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim();
 
 /** PATCH /api/bills/clear-due?name=... — sets or clears nextDue on all bills matching the given name. Body: { nextDue?: string } (omit or "" to clear). */
 export async function PATCH(request: Request) {
@@ -26,25 +23,18 @@ export async function PATCH(request: Request) {
     // no body or invalid — keep clear behavior
   }
 
-  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
-  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
-  const apiBase = POCKETBASE_API_URL || base;
-
-  let token: string;
-  let resolvedBase: string;
-  try {
-    const r = await getAdminToken(apiBase, email, password);
-    token = r.token;
-    resolvedBase = r.baseUrl.replace(/\/$/, "");
-  } catch {
-    return NextResponse.json({ ok: false, message: "Admin auth required to update due dates." }, { status: 401 });
+  const auth = await getPbWriteToken(base);
+  if (!auth) {
+    return NextResponse.json(
+      { ok: false, message: "Sign in or set PocketBase admin credentials to update due dates." },
+      { status: 401 }
+    );
   }
 
-  // Fetch all bills matching this name (escaped — avoids broken filters / injection on odd names)
   const filter = encodeURIComponent(`name="${escapePbFilterString(name)}"`);
   const listRes = await fetch(
-    `${resolvedBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
-    { cache: "no-store", headers: { Authorization: `Bearer ${token}` } }
+    `${auth.apiBase}/api/collections/bills/records?filter=${filter}&perPage=100`,
+    { cache: "no-store", headers: { Authorization: `Bearer ${auth.token}` } }
   );
   if (!listRes.ok) {
     return NextResponse.json({ ok: false, message: `Could not fetch bills: ${listRes.status}` }, { status: 502 });
@@ -57,9 +47,9 @@ export async function PATCH(request: Request) {
 
   let updated = 0;
   for (const id of ids) {
-    const res = await fetch(`${resolvedBase}/api/collections/bills/records/${id}`, {
+    const res = await fetch(`${auth.apiBase}/api/collections/bills/records/${id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.token}` },
       body: JSON.stringify({ nextDue: nextDueValue }),
     });
     if (res.ok) updated++;

@@ -227,6 +227,8 @@ export async function createCollections(
         textField("recurringPaidCycle", false),
         textField("recurringPaidGoalId", false),
         textField("recurringPaidStatementId", false),
+        numberField("paycheckAmountOverride", false),
+        textField("paycheckAmountOverrideFor", false),
       ],
     },
     {
@@ -251,6 +253,8 @@ export async function createCollections(
         textField("recurringPaidCycle", false),
         textField("recurringPaidGoalId", false),
         textField("recurringPaidStatementId", false),
+        numberField("paycheckAmountOverride", false),
+        textField("paycheckAmountOverrideFor", false),
       ],
     },
     {

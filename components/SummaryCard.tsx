@@ -65,6 +65,7 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
     upcomingTransfersOutOfChecking = [],
     autoTransfers = [],
     transferredThisCycleBonus,
+    transfersOutUntilNextPaycheck = 0,
   } = moneyStatus;
   const incomeUsedForLeftOver = incomeForDisplayMonth ?? paychecksThisMonth;
   const leftOverProjected = leftOverComputed + (paychecksThisMonth - incomeUsedForLeftOver);
@@ -158,13 +159,19 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
   };
 
   const reqPaycheckByKey: Record<AccountKey, number> = requiredThisPaycheckByAccount
-    ? { checking: requiredThisPaycheckByAccount.checkingAccount, bills: requiredThisPaycheckByAccount.billsAccount, spanishFork: requiredThisPaycheckByAccount.spanishFork }
+    ? {
+        checking: requiredThisPaycheckByAccount.checkingAccount,
+        bills: requiredThisPaycheckByAccount.billsAccount,
+        spanishFork: requiredThisPaycheckByAccount.spanishFork,
+      }
     : { checking: 0, bills: 0, spanishFork: 0 };
+
+  const checkingRequiredUntilPaycheck = reqPaycheckByKey.checking + transfersOutUntilNextPaycheck;
 
   const runway: RunwayByAccount = {
     checking: {
       balance: balances.checking ?? computedCurrentByKey.checking,
-      required: reqPaycheckByKey.checking,
+      required: checkingRequiredUntilPaycheck,
       nextInflow: nextPaycheckAmount ?? 0,
     },
     bills: {
@@ -325,7 +332,9 @@ export function SummaryCard({ moneyStatus }: SummaryCardProps) {
                         const stored = balances[key];
                         const computed = computedCurrentByKey[key];
                         const current = stored ?? computed;
-                        const enoughForPaycheck = reqPaycheck <= 0 || current + autoIn >= reqPaycheck;
+                        const enoughForPaycheck =
+                          reqPaycheck <= 0 ||
+                          (stored != null ? stored + autoIn : computed) >= reqPaycheck;
                         const diffColor = enoughForPaycheck ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400";
                         const isEditing = editing === key;
                         const autoDetails = autoInDetailsByKeyThisTable[key];
