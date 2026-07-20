@@ -43,6 +43,7 @@ export async function POST(request: Request) {
       spend: snapshot.spend,
       recurringCandidates: snapshot.recurringCandidates.slice(0, 20),
       dataNotes: snapshot.dataNotes,
+      moneyHealth: snapshot.moneyHealth,
     };
     const briefNote = body.briefSections
       ? `\nPrior brief:\nCash: ${body.briefSections.cash}\nSpend: ${body.briefSections.spend}\nCuts: ${body.briefSections.cuts}\n`

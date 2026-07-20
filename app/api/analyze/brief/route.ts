@@ -95,6 +95,7 @@ export async function POST(request: Request) {
       },
       recurringCandidates: snapshot.recurringCandidates.slice(0, 15),
       dataNotes: snapshot.dataNotes,
+      moneyHealth: snapshot.moneyHealth,
     };
 
     const raw = await ollamaChat({
