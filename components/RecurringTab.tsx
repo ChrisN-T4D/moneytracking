@@ -578,14 +578,17 @@ export function RecurringTab({
       result[acct].incoming = sumEventAmounts(
         upcomingEvents,
         (e) =>
-          (e.type === "income" && e.account === acct) ||
-          (e.type === "transfer" && e.account === acct)
+          !e.isPaid &&
+          ((e.type === "income" && e.account === acct) ||
+            (e.type === "transfer" && e.account === acct))
       );
+      // Mark paid = money already left the account; drop from Planned out / Projected.
       result[acct].outgoing = sumEventAmounts(
         upcomingEvents,
         (e) =>
-          (e.type === "expense" && e.account === acct) ||
-          (e.type === "transfer" && e.fromAccount === acct)
+          !e.isPaid &&
+          ((e.type === "expense" && e.account === acct) ||
+            (e.type === "transfer" && e.fromAccount === acct))
       );
     }
     return result;
