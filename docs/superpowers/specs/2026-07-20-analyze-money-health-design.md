@@ -1,7 +1,7 @@
 # Analyze brief — money health + room to spend (design)
 
 Date: 2026-07-20  
-Status: ready for user review  
+Status: approved  
 App: Neu Money Tracking  
 Extends: `docs/superpowers/specs/2026-07-20-analyze-tab-design.md`
 
