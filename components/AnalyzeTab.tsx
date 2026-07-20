@@ -173,6 +173,38 @@ export function AnalyzeTab() {
           <p className="text-sm text-red-600 dark:text-red-400 mb-2">{briefError}</p>
         )}
 
+        {snapshot?.moneyHealth && (
+          <>
+            <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                How we're doing
+              </h3>
+              <p className={`inline-flex items-center gap-1 text-sm ${snapshot.moneyHealth.status === "Good" ? "text-green-600" : snapshot.moneyHealth.status === "Warning" ? "text-yellow-600" : "text-red-600"}`}>
+                {snapshot.moneyHealth.status}
+              </p>
+              <SectionBody text={snapshot.moneyHealth.statusLines.join("\n")} />
+            </div>
+            <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                Room to spend
+              </h3>
+              <div className="flex justify-between gap-2 tabular-nums text-sm sm:text-base">
+                <span>Groceries & Gas left</span>
+                <span>{formatCurrency(snapshot.moneyHealth.groceriesRemaining)} of {formatCurrency(snapshot.budget)}</span>
+              </div>
+              <div className="flex justify-between gap-2 tabular-nums text-sm sm:text-base">
+                <span>Flexible leftover</span>
+                <span>
+                  {snapshot.moneyHealth.flexibleLeftover < 0
+                    ? `${formatCurrency(snapshot.moneyHealth.flexibleLeftover)} short`
+                    : formatCurrency(snapshot.moneyHealth.flexibleLeftoverDisplay)
+                  }
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+
         {sections && (
           <div className="space-y-3">
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
@@ -222,6 +254,9 @@ export function AnalyzeTab() {
                   ))}
                 </ul>
               )}
+              <p className="text-xs font-medium text-neutral-500 mb-1">
+                Status: {snapshot.moneyHealth?.status}, Groceries left: {formatCurrency(snapshot.moneyHealth?.groceriesRemaining)}, Flexible leftover: {formatCurrency(snapshot.moneyHealth?.flexibleLeftoverDisplay)}
+              </p>
               <div>
                 <p className="text-xs font-medium text-neutral-500 mb-1">Accounts</p>
                 <ul className="space-y-1">
