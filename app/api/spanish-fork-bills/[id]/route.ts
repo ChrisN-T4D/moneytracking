@@ -15,6 +15,7 @@ type SpanishForkBillUpdateBody = {
   recurringPaidStatementID?: string | null;
   paycheckAmountOverride?: number | null;
   paycheckAmountOverrideFor?: string | null;
+  isEssential?: boolean | null;
 };
 
 /** PATCH /api/spanish-fork-bills/[id] — update a Spanish Fork bill record. */
@@ -95,6 +96,12 @@ export async function PATCH(
     const v = body.paycheckAmountOverrideFor;
     payload.paycheckAmountOverrideFor =
       v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
+  if (body.isEssential !== undefined) {
+    if (typeof body.isEssential !== "boolean") {
+      return NextResponse.json({ ok: false, message: "isEssential must be a boolean." }, { status: 400 });
+    }
+    payload.isEssential = body.isEssential;
   }
 
   if (Object.keys(payload).length === 0) {

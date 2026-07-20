@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { formatCurrency, displayBillName } from "@/lib/format";
+import { resolveIsEssential } from "@/lib/billEssential";
 import { formatDateForDue, formatDateNoYear, parseFlexibleDate } from "@/lib/paycheckDates";
 import type { BillOrSub, Frequency } from "@/lib/types";
 import { isGroupedBillId, isSyntheticBillSubsectionKey } from "@/lib/pocketbase";
@@ -425,6 +426,7 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
           <colgroup>
             <col style={{ minWidth: "6rem" }} />{/* Name — gets remaining space, never collapses */}
             <col className="w-10" />{/* Freq badge */}
+            <col className="w-14" />{/* Essential */}
             <col className="w-20" />{/* Next due */}
             <col className="w-16" />{/* This paycheck? */}
             <col className="w-24" />{/* Amount */}
@@ -436,6 +438,9 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
             <tr className="border-b border-neutral-200 dark:border-neutral-600 text-left text-xs text-neutral-500 dark:text-neutral-400">
               <th className="sticky left-0 z-10 py-2 pr-2 font-medium min-w-0 bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-700 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] dark:shadow-[2px_0_4px_-2px_rgba(0,0,0,0.3)]">Name</th>
               <th className="py-2 pr-2 font-medium text-center">Freq</th>
+              <th className="py-2 pr-2 font-medium text-center" title="Essential = must pay; Optional = Cut list">
+                Need
+              </th>
               <th className="py-2 pr-2 font-medium whitespace-nowrap">Due / Last paid</th>
               <th className="py-2 pr-2 font-medium text-center whitespace-nowrap">Left in paycheck</th>
               <th className="py-2 pr-2 font-medium text-right">Amount</th>
@@ -548,6 +553,71 @@ export function BillsList({ title, subtitle, items: initialItems, monthlySpendin
                     ) : (
                       frequencyBadge(item.frequency)
                     )}
+                  </td>
+                  <td className="py-2 pr-2 text-center whitespace-nowrap">
+                    {(() => {
+                      const essential = resolveIsEssential(item.isEssential, sectionListType);
+                      if (!canDelete) {
+                        return (
+                          <span
+                            className={`text-[10px] font-medium ${
+                              essential
+                                ? "text-emerald-700 dark:text-emerald-400"
+                                : "text-neutral-500 dark:text-neutral-400"
+                            }`}
+                          >
+                            {essential ? "Need" : "Cut?"}
+                          </span>
+                        );
+                      }
+                      return (
+                        <button
+                          type="button"
+                          title={
+                            essential
+                              ? "Essential (must pay). Click to mark optional for Cut list."
+                              : "Optional (Cut list). Click to mark essential."
+                          }
+                          onClick={async () => {
+                            const next = !essential;
+                            setItems((cur) =>
+                              cur.map((i) => (i.id === item.id ? { ...i, isEssential: next } : i))
+                            );
+                            try {
+                              const url = billPatchUrl(item, sectionCtx);
+                              const ok = (
+                                await billsApiFetch(url, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ isEssential: next }),
+                                })
+                              ).ok;
+                              if (ok) router.refresh();
+                              else {
+                                setItems((cur) =>
+                                  cur.map((i) =>
+                                    i.id === item.id ? { ...i, isEssential: item.isEssential } : i
+                                  )
+                                );
+                              }
+                            } catch {
+                              setItems((cur) =>
+                                cur.map((i) =>
+                                  i.id === item.id ? { ...i, isEssential: item.isEssential } : i
+                                )
+                              );
+                            }
+                          }}
+                          className={`text-[10px] font-medium rounded px-1 py-0.5 hover:opacity-80 ${
+                            essential
+                              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                              : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"
+                          }`}
+                        >
+                          {essential ? "Need" : "Cut?"}
+                        </button>
+                      );
+                    })()}
                   </td>
                   <td className="py-2.5 pr-2 whitespace-nowrap">
                     {(() => {

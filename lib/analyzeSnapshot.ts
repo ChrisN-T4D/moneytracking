@@ -31,6 +31,7 @@ import {
   recurringCycleKeyForExpense,
   isManualRecurringPaidForKey,
 } from "@/lib/recurringPaidCycle";
+import { resolveIsEssential } from "./billEssential";
 import type { StatementRecord } from "@/lib/types";
 
 export interface AnalyzeSnapshot {
@@ -56,6 +57,24 @@ export interface AnalyzeSnapshot {
     date: string;
     amount: number;
     isPaid: boolean;
+    isEssential: boolean;
+  }[];
+  /** Optional recurring / subscriptions only — Cut list source of truth. */
+  cutCandidates: {
+    name: string;
+    amount: number;
+    monthlyEquivalent: number | null;
+    frequency: string | null;
+    dueInWindow: boolean;
+    source: "subscription_bill" | "statement_pattern";
+  }[];
+  /** Must-pay upcoming (essential bills) — never suggest cutting these. */
+  mustPayUpcoming: {
+    name: string;
+    account: string;
+    date: string;
+    amount: number;
+    isPaid: boolean;
   }[];
   spend: {
     thisCycleOutflow: number;
@@ -73,6 +92,7 @@ export interface AnalyzeSnapshot {
     frequency: string | null;
     /** True when next due falls in the paycheck window (actionable now). */
     dueInWindow: boolean;
+    isEssential: boolean;
   }[];
   /** Deterministic cash lines — UI renders these; model must not rewrite Cash picture $. */
   cashPictureLines: string[];
@@ -247,12 +267,14 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
         false
       );
       const amt = effectivePaycheckAmount(b, nextPaydayYmd);
+      const essential = resolveIsEssential(b.isEssential, b.listType);
       largeUpcoming.push({
         name: b.name,
         account: b.account ?? "checking_account",
         date: occ,
         amount: amt,
         isPaid,
+        isEssential: essential,
       });
       if (!isPaid) {
         if (b.account === "bills_account") billsOutBills += amt;
@@ -283,12 +305,14 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
         false
       );
       const amt = effectivePaycheckAmount(b, nextPaydayYmd);
+      const essential = resolveIsEssential(b.isEssential, "bills");
       largeUpcoming.push({
         name: b.name,
         account: "spanish_fork",
         date: occ,
         amount: amt,
         isPaid,
+        isEssential: essential,
       });
       if (!isPaid) billsOutSf += amt;
     }
@@ -415,6 +439,7 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
       monthlyEquivalent: Math.round(monthly * 100) / 100,
       frequency: b.frequency ?? null,
       dueInWindow,
+      isEssential: resolveIsEssential(b.isEssential, b.listType),
     });
   }
 
@@ -447,6 +472,7 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
       monthlyEquivalent: Math.round(avg * 100) / 100,
       frequency: "recurring_pattern",
       dueInWindow: false,
+      isEssential: false,
     });
   }
   // Prefer actionable (due in window / monthly) over annual renewals far out
@@ -484,6 +510,34 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
     accounts,
     paychecksNearWindow: paychecksNearWindow.sort((a, b) => a.date.localeCompare(b.date)),
     largeUpcomingBills: largeUpcoming.slice(0, 20),
+    mustPayUpcoming: largeUpcoming
+      .filter((b) => b.isEssential && !b.isPaid)
+      .slice(0, 15)
+      .map(({ name, account, date, amount, isPaid }) => ({ name, account, date, amount, isPaid })),
+    cutCandidates: [
+      ...recurringCandidates
+        .filter((r) => !r.isEssential)
+        .slice(0, 20)
+        .map((r) => ({
+          name: r.name,
+          amount: r.amount,
+          monthlyEquivalent: r.monthlyEquivalent,
+          frequency: r.frequency,
+          dueInWindow: r.dueInWindow,
+          source: r.source,
+        })),
+      ...largeUpcoming
+        .filter((b) => !b.isEssential && !b.isPaid)
+        .slice(0, 10)
+        .map((b) => ({
+          name: b.name,
+          amount: b.amount,
+          monthlyEquivalent: b.amount,
+          frequency: null,
+          dueInWindow: true,
+          source: "subscription_bill" as const,
+        })),
+    ].slice(0, 25),
     spend: {
       thisCycleOutflow: Math.round(thisSpend.total * 100) / 100,
       priorCycleOutflow: Math.round(priorSpend.total * 100) / 100,

@@ -176,6 +176,7 @@ interface PbBill {
   recurringPaidStatementId?: string | null;
   paycheckAmountOverride?: number | null;
   paycheckAmountOverrideFor?: string | null;
+  isEssential?: boolean | null;
 }
 
 function parseFrequency(s: string | undefined): Frequency {
@@ -199,6 +200,8 @@ function parseBill(
     paycheckOverrideRaw === null || paycheckOverrideRaw === undefined
       ? null
       : Number(paycheckOverrideRaw);
+  const isEssential =
+    typeof item.isEssential === "boolean" ? item.isEssential : null;
   if (!rawNextDue) {
     return {
       id: item.id,
@@ -214,6 +217,7 @@ function parseBill(
       recurringPaidStatementId: recurringStmt,
       paycheckAmountOverride: paycheckOverride,
       paycheckAmountOverrideFor: paycheckOverrideFor,
+      isEssential,
     };
   }
   const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
@@ -240,6 +244,7 @@ function parseBill(
     recurringPaidStatementId: recurringStmt,
     paycheckAmountOverride: paycheckOverride,
     paycheckAmountOverrideFor: paycheckOverrideFor,
+    isEssential,
   };
 }
 
@@ -252,6 +257,8 @@ export async function getBillsWithMeta(
   payPeriodEndDates?: Date[] | null
 ): Promise<BillOrSubWithMeta[]> {
   if (!POCKETBASE_URL) return [];
+  const { ensurePaycheckOverrideFields } = await import("@/lib/ensurePbPaycheckOverrideFields");
+  await ensurePaycheckOverrideFields(POCKETBASE_URL);
   const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
   const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
   const adminApiBase = POCKETBASE_API_URL || BASE;
@@ -439,6 +446,7 @@ interface PbSpanishForkBill {
   recurringPaidStatementID?: string | null;
   paycheckAmountOverride?: number | null;
   paycheckAmountOverrideFor?: string | null;
+  isEssential?: boolean | null;
 }
 
 /** Fetch Spanish Fork bills from PocketBase. Returns [] if URL not set or request fails. */
@@ -476,6 +484,8 @@ export async function getSpanishForkBills(
         paycheckOverrideRaw === null || paycheckOverrideRaw === undefined
           ? null
           : Number(paycheckOverrideRaw);
+      const isEssential =
+        typeof item.isEssential === "boolean" ? item.isEssential : null;
       const { nextDue, inThisPaycheck } = getNextDueAndPaycheck(
         item.nextDue ?? "",
         item.frequency ?? "monthly",
@@ -499,6 +509,7 @@ export async function getSpanishForkBills(
         recurringPaidStatementId: (item.recurringPaidStatementID ?? "").trim() || null,
         paycheckAmountOverride: paycheckOverride,
         paycheckAmountOverrideFor: paycheckOverrideFor,
+        isEssential,
       };
     });
   } catch {

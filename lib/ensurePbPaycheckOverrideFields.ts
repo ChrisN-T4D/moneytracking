@@ -6,6 +6,7 @@ import { getAdminToken } from "@/lib/pocketbase-setup";
 const OVERRIDE_FIELDS = [
   { name: "paycheckAmountOverride", type: "number", required: false },
   { name: "paycheckAmountOverrideFor", type: "text", required: false },
+  { name: "isEssential", type: "bool", required: false },
 ] as const;
 
 async function ensureFieldsOnCollection(

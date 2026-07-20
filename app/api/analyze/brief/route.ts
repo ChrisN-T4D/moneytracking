@@ -85,6 +85,8 @@ export async function POST(request: Request) {
       accounts: snapshot.accounts,
       paychecksNearWindow: snapshot.paychecksNearWindow,
       largeUpcomingBills: snapshot.largeUpcomingBills.slice(0, 12),
+      mustPayUpcoming: snapshot.mustPayUpcoming.slice(0, 12),
+      cutCandidates: snapshot.cutCandidates.slice(0, 15),
       spend: {
         thisCycleOutflow: snapshot.spend.thisCycleOutflow,
         priorCycleOutflow: snapshot.spend.priorCycleOutflow,

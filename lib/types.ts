@@ -19,6 +19,11 @@ export interface BillOrSub {
   paycheckAmountOverride?: number | null;
   /** Paycheck key p:YYYY-MM-DD — must match next payday for override to apply. */
   paycheckAmountOverrideFor?: string | null;
+  /**
+   * Essential = must-pay (Cut list ignores). Optional = fair to cut.
+   * Null/undefined → default from listType (subscriptions optional, else essential).
+   */
+  isEssential?: boolean | null;
 }
 
 export interface AutoTransfer {
@@ -46,6 +51,8 @@ export interface SpanishForkBill {
   recurringPaidStatementId?: string | null;
   paycheckAmountOverride?: number | null;
   paycheckAmountOverrideFor?: string | null;
+  /** Essential = must-pay; null → default essential for Spanish Fork. */
+  isEssential?: boolean | null;
 }
 
 export interface Summary {

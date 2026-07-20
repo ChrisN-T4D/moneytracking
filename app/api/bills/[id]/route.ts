@@ -21,6 +21,7 @@ type BillUpdateBody = {
   /** One-paycheck amount override (see paycheckAmountOverrideFor). */
   paycheckAmountOverride?: number | null;
   paycheckAmountOverrideFor?: string | null;
+  isEssential?: boolean | null;
 };
 
 const allowedFrequencies = ["2weeks", "monthly", "yearly"] as const;
@@ -113,6 +114,12 @@ export async function PATCH(
     const v = body.paycheckAmountOverrideFor;
     payload.paycheckAmountOverrideFor =
       v === null || (typeof v === "string" && v.trim() === "") ? null : String(v).trim();
+  }
+  if (body.isEssential !== undefined) {
+    if (typeof body.isEssential !== "boolean") {
+      return NextResponse.json({ ok: false, message: "isEssential must be a boolean." }, { status: 400 });
+    }
+    payload.isEssential = body.isEssential;
   }
 
   if (Object.keys(payload).length === 0) {
