@@ -173,40 +173,59 @@ export function AnalyzeTab() {
           <p className="text-sm text-red-600 dark:text-red-400 mb-2">{briefError}</p>
         )}
 
-        {snapshot?.moneyHealth && (
-          <>
-            <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
-                How we're doing
-              </h3>
-              <p className={`inline-flex items-center gap-1 text-sm ${snapshot.moneyHealth.status === "Good" ? "text-green-600" : snapshot.moneyHealth.status === "Warning" ? "text-yellow-600" : "text-red-600"}`}>
-                {snapshot.moneyHealth.status}
-              </p>
-              <SectionBody text={snapshot.moneyHealth.statusLines.join("\n")} />
-            </div>
-            <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
-                Room to spend
-              </h3>
-              <div className="flex justify-between gap-2 tabular-nums text-sm sm:text-base">
-                <span>Groceries & Gas left</span>
-                <span>{formatCurrency(snapshot.moneyHealth.groceriesRemaining)} of {formatCurrency(snapshot.budget)}</span>
-              </div>
-              <div className="flex justify-between gap-2 tabular-nums text-sm sm:text-base">
-                <span>Flexible leftover</span>
-                <span>
-                  {snapshot.moneyHealth.flexibleLeftover < 0
-                    ? `${formatCurrency(snapshot.moneyHealth.flexibleLeftover)} short`
-                    : formatCurrency(snapshot.moneyHealth.flexibleLeftoverDisplay)
-                  }
-                </span>
-              </div>
-            </div>
-          </>
-        )}
-
-        {sections && (
+        {(snapshot?.moneyHealth || sections) && (
           <div className="space-y-3">
+            {snapshot?.moneyHealth && (
+              <>
+                <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                      How we&apos;re doing
+                    </h3>
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                        snapshot.moneyHealth.status === "comfortable"
+                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                          : snapshot.moneyHealth.status === "ok"
+                            ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200"
+                            : "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+                      }`}
+                    >
+                      {snapshot.moneyHealth.status}
+                    </span>
+                  </div>
+                  <SectionBody text={snapshot.moneyHealth.statusLines.join("\n")} />
+                </div>
+                <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
+                    Room to spend
+                  </h3>
+                  <div className="flex justify-between gap-2 tabular-nums text-base font-semibold text-neutral-900 dark:text-white">
+                    <span className="text-sm font-medium text-neutral-600 dark:text-neutral-300">
+                      Groceries &amp; Gas left
+                    </span>
+                    <span>
+                      {formatCurrency(snapshot.moneyHealth.groceriesRemaining)}
+                      <span className="block text-[10px] font-normal text-neutral-400 text-right">
+                        of {formatCurrency(snapshot.moneyHealth.groceriesBudget)}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2 tabular-nums text-base font-semibold text-neutral-900 dark:text-white mt-2">
+                    <span className="text-sm font-medium text-neutral-600 dark:text-neutral-300">
+                      Flexible leftover
+                    </span>
+                    <span>
+                      {snapshot.moneyHealth.flexibleLeftover < 0
+                        ? `${formatCurrency(snapshot.moneyHealth.flexibleLeftover)} short`
+                        : formatCurrency(snapshot.moneyHealth.flexibleLeftoverDisplay)}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+            {sections && (
+              <>
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
                 Cash picture
@@ -231,6 +250,8 @@ export function AnalyzeTab() {
               </h3>
               <SectionBody text={sections.cuts} />
             </div>
+              </>
+            )}
           </div>
         )}
       </div>

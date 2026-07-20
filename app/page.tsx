@@ -62,6 +62,7 @@ import {
 } from "@/lib/summaryCalculations";
 import { formatDateToYYYYMMDD, getNextPaydayFromSchedule, getNextDueAndPaycheck, getTodayUTC } from "@/lib/paycheckDates";
 import { defaultPaycheckConfigs, getNextBiweeklyPayDate } from "@/lib/paycheckConfig";
+import { GROCERIES_AND_GAS_PER_PAYCHECK } from "@/lib/groceriesBudget";
 
 export const dynamic = "force-dynamic";
 
@@ -350,7 +351,6 @@ export default async function Home() {
   );
 
   // Groceries & Gas: $250 per paycheck; remaining = 250 - spent in current pay period (biweekly)
-  const GROCERIES_AND_GAS_PER_PAYCHECK = 250;
   const nextBiweekly = getNextBiweeklyPayDate(paycheckConfigs, today);
   const groceriesAndGasBudget = GROCERIES_AND_GAS_PER_PAYCHECK;
   let groceriesAndGasSpent = 0;

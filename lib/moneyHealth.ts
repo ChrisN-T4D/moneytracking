@@ -47,10 +47,10 @@ export function buildMoneyHealth(options: {
 
   const checkingUnknown = checking != null && checking.projected == null && checking.balance == null;
   if (checkingUnknown) {
-    dataNotes.push("Checking balance unknown â€” flexible leftover may be incomplete.");
+    dataNotes.push("Checking balance unknown — flexible leftover may be incomplete.");
   }
   if (groceries.periodStartYmd == null) {
-    dataNotes.push("No biweekly payday found â€” groceries envelope used budget with $0 spent.");
+    dataNotes.push("No biweekly payday found — groceries envelope used budget with $0 spent.");
   }
 
   let flexibleLeftover = 0;
@@ -89,7 +89,7 @@ export function buildMoneyHealth(options: {
 
   if (flexibleLeftover < 0) {
     statusLines.push(
-      `Short ~${fmtMoney(Math.abs(flexibleLeftover))} after must-pays and groceries â€” cut optionals or delay spend.`
+      `Short ~${fmtMoney(Math.abs(flexibleLeftover))} after must-pays and groceries — cut optionals or delay spend.`
     );
   } else {
     statusLines.push(

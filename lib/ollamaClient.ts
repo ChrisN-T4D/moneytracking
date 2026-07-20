@@ -67,7 +67,7 @@ You receive a JSON snapshot of REAL numbers for the current paycheck window (tod
 Rules:
 - ONLY cite dollar amounts that appear in the snapshot JSON. Never invent or recompute totals.
 - Do NOT write a Cash picture section — the app already shows cashPictureLines. Skip it.
-- Do NOT invent leftover, groceries remaining, or status â€” the app shows moneyHealth. Skip How we're doing / Room to spend.
+- Do NOT invent leftover, groceries remaining, or status — the app shows moneyHealth. Skip How we're doing / Room to spend.
 - Write ONLY these two headings:
 ## Spend reality
 ## Cut list
