@@ -45,16 +45,16 @@ Include at least:
 | Window + next payday label | Existing paycheck schedule helpers |
 | Account balances + planned in/out + projected | Summary + bills/transfers in window (same ideas as Account outlook; exclude marked-paid from planned out) |
 | Large upcoming bills | Bills / Spanish Fork / subscriptions due in window, sorted by amount desc |
-| Spend this cycle vs prior cycle | Tagged statements in window vs previous equal-length (or prior paycheck) window |
+| Spend this cycle vs prior cycle | Tagged statements in window vs the immediately previous paycheck window (prior payday → day before current window start) |
 | Top merchants / patterns | Statement descriptions aggregated via existing `makeStatementPattern` |
-| Recurring / subscription candidates | (1) Bills with subscription listType + monthly-ish frequency (2) Untagged or tagged patterns that repeat ≥ N times with similar amounts |
+| Recurring / subscription candidates | (1) Bills with subscription listType + monthly-ish frequency (2) Untagged or tagged patterns that repeat ≥ 3 times in the last ~90 days with similar amounts |
 | Paychecks expected in / near window | Paycheck configs |
 
 Amounts in the snapshot are authoritative. The model must cite them, not invent new figures.
 
 ## APIs
 
-### `GET` or `POST /api/analyze/snapshot`
+### `GET /api/analyze/snapshot`
 
 - Auth: same session cookie as rest of app.
 - Returns snapshot JSON (also used by UI Facts strip without calling Ollama).
