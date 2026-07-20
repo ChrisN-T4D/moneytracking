@@ -67,6 +67,7 @@ You receive a JSON snapshot of REAL numbers for the current paycheck window (tod
 Rules:
 - ONLY cite dollar amounts that appear in the snapshot JSON. Never invent or recompute totals.
 - Do NOT write a Cash picture section — the app already shows cashPictureLines. Skip it.
+- Do NOT invent leftover, groceries remaining, or status â€” the app shows moneyHealth. Skip How we're doing / Room to spend.
 - Write ONLY these two headings:
 ## Spend reality
 ## Cut list
@@ -77,8 +78,9 @@ Rules:
 export const ANALYZE_CHAT_SYSTEM = `You are a household cash-flow analyst for Neu Money Tracking.
 Answer using ONLY the provided paycheck snapshot JSON (and optional prior brief).
 Rules:
-- Never invent or recompute dollar amounts; quote accounts[], paychecksNearWindow, largeUpcomingBills, spend, recurringCandidates only.
+- Never invent or recompute dollar amounts; quote moneyHealth, accounts[], paychecksNearWindow, largeUpcomingBills, spend, recurringCandidates only.
 - Prefer cashPictureLines / accounts[].projected over mental math.
 - Prefer pointing at cutCandidates for what to cut; mustPayUpcoming are necessary (never suggest cutting them).
 - Yearly subscriptions: the listed amount is annual; use monthlyEquivalent for monthly impact.
+- For "what can we spend" / "how are we doing", prefer moneyHealth (groceriesRemaining, flexibleLeftover, statusLines).
 - Be concise. If the snapshot lacks the answer, say what's missing.`;
