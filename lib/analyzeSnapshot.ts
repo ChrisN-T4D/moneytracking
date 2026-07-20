@@ -70,7 +70,12 @@ export interface AnalyzeSnapshot {
     count: number;
     lastDate: string | null;
     monthlyEquivalent: number | null;
+    frequency: string | null;
+    /** True when next due falls in the paycheck window (actionable now). */
+    dueInWindow: boolean;
   }[];
+  /** Deterministic cash lines — UI renders these; model must not rewrite Cash picture $. */
+  cashPictureLines: string[];
   dataNotes: string[];
 }
 
@@ -291,27 +296,27 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
 
   largeUpcoming.sort((a, b) => b.amount - a.amount);
 
-  // Paychecks / planned in (checking)
+  // Paychecks / planned in (checking) — single pass, dedupe name+date
   const paychecksNearWindow: AnalyzeSnapshot["paychecksNearWindow"] = [];
   let plannedInChecking = 0;
-  for (const c of configs) {
-    for (const p of allPayDatesNearMonth([c], today.getFullYear(), today.getMonth())) {
-      const ymd = formatDateToYYYYMMDD(p.date);
-      if (ymd >= todayYmd && ymd <= windowEnd) {
+  const seenPay = new Set<string>();
+  const monthsToScan =
+    nextPayday && nextPayday.getMonth() !== today.getMonth()
+      ? [
+          { y: today.getFullYear(), m: today.getMonth() },
+          { y: nextPayday.getFullYear(), m: nextPayday.getMonth() },
+        ]
+      : [{ y: today.getFullYear(), m: today.getMonth() }];
+  for (const { y, m } of monthsToScan) {
+    for (const c of configs) {
+      for (const p of allPayDatesNearMonth([c], y, m)) {
+        const ymd = formatDateToYYYYMMDD(p.date);
+        if (ymd < todayYmd || ymd > windowEnd) continue;
+        const key = `${c.name}|${ymd}`;
+        if (seenPay.has(key)) continue;
+        seenPay.add(key);
         paychecksNearWindow.push({ name: c.name, date: ymd, amount: p.amount });
         plannedInChecking += p.amount;
-      }
-    }
-  }
-  // Also catch next month if window crosses
-  if (nextPayday && nextPayday.getMonth() !== today.getMonth()) {
-    for (const c of configs) {
-      for (const p of allPayDatesNearMonth([c], nextPayday.getFullYear(), nextPayday.getMonth())) {
-        const ymd = formatDateToYYYYMMDD(p.date);
-        if (ymd >= todayYmd && ymd <= windowEnd && !paychecksNearWindow.some((x) => x.date === ymd && x.name === c.name)) {
-          paychecksNearWindow.push({ name: c.name, date: ymd, amount: p.amount });
-          plannedInChecking += p.amount;
-        }
       }
     }
   }
@@ -380,17 +385,36 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
   const recurringCandidates: AnalyzeSnapshot["recurringCandidates"] = [];
   for (const b of billsWithMeta) {
     if ((b.listType ?? "") !== "subscriptions") continue;
+    const freq = (b.frequency ?? "monthly").toLowerCase();
+    const amt = b.amount ?? 0;
     const monthly =
-      (b.frequency ?? "").toLowerCase().includes("2") && (b.frequency ?? "").toLowerCase().includes("week")
-        ? (b.amount ?? 0) * 2.166
-        : b.amount ?? 0;
+      freq.includes("year")
+        ? amt / 12
+        : freq.includes("2") && (freq.includes("week") || freq.includes("wk"))
+          ? amt * 2.166
+          : amt;
+    const dueYmd = (b.nextDue ?? "").includes("T")
+      ? b.nextDue!.slice(0, 10)
+      : /^\d{4}-\d{2}-\d{2}/.test(b.nextDue ?? "")
+        ? b.nextDue!.slice(0, 10)
+        : null;
+    // Loose parse for "Nov 11, 2027" style
+    let dueInWindow = false;
+    if (dueYmd && /^\d{4}-\d{2}-\d{2}$/.test(dueYmd)) {
+      dueInWindow = dueYmd >= todayYmd && dueYmd <= windowEnd;
+    } else if (b.nextDue) {
+      const occs = billOccurrenceDatesInRange(b, todayYmd, windowEnd);
+      dueInWindow = occs.length > 0;
+    }
     recurringCandidates.push({
       name: b.name,
       source: "subscription_bill",
-      amount: b.amount ?? 0,
+      amount: amt,
       count: 1,
-      lastDate: b.nextDue?.slice(0, 10) ?? null,
+      lastDate: dueYmd,
       monthlyEquivalent: Math.round(monthly * 100) / 100,
+      frequency: b.frequency ?? null,
+      dueInWindow,
     });
   }
 
@@ -413,7 +437,6 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
   for (const [pattern, v] of patternAgg) {
     if (v.count < 3) continue;
     const avg = v.amountSum / v.count;
-    // skip if already listed as subscription bill name overlap
     if (recurringCandidates.some((r) => r.name.toUpperCase().includes(pattern.slice(0, 8)))) continue;
     recurringCandidates.push({
       name: pattern,
@@ -422,9 +445,34 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
       count: v.count,
       lastDate: v.lastDate,
       monthlyEquivalent: Math.round(avg * 100) / 100,
+      frequency: "recurring_pattern",
+      dueInWindow: false,
     });
   }
-  recurringCandidates.sort((a, b) => (b.monthlyEquivalent ?? b.amount) - (a.monthlyEquivalent ?? a.amount));
+  // Prefer actionable (due in window / monthly) over annual renewals far out
+  recurringCandidates.sort((a, b) => {
+    if (a.dueInWindow !== b.dueInWindow) return a.dueInWindow ? -1 : 1;
+    return (b.monthlyEquivalent ?? b.amount) - (a.monthlyEquivalent ?? a.amount);
+  });
+
+  const fmt = (n: number | null | undefined) =>
+    n == null || Number.isNaN(n) ? "—" : `$${Math.round(n * 100) / 100}`;
+
+  const cashPictureLines: string[] = accounts.map((a) => {
+    const enough =
+      a.projected == null ? "balance unknown" : a.projected >= a.required ? "enough for required" : "short vs required";
+    return `${a.label}: balance ${fmt(a.balance)}, planned in ${fmt(a.plannedIn)}, planned out ${fmt(a.plannedOut)}, projected ${fmt(a.projected)}, required ${fmt(a.required)} (${enough}).`;
+  });
+  if (paychecksNearWindow.length > 0) {
+    cashPictureLines.push(
+      `Paychecks in window: ${paychecksNearWindow.map((p) => `${p.name} ${fmt(p.amount)} on ${p.date}`).join("; ")}.`
+    );
+  } else {
+    cashPictureLines.push("No paychecks scheduled in this window.");
+  }
+  cashPictureLines.push(
+    `Recorded statement spend this cycle: ${fmt(Math.round(thisSpend.total * 100) / 100)} (different from planned bill outflows).`
+  );
 
   return {
     window: {
@@ -443,6 +491,7 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
       byCategory,
     },
     recurringCandidates: recurringCandidates.slice(0, 25),
+    cashPictureLines,
     dataNotes,
   };
 }

@@ -179,7 +179,13 @@ export function AnalyzeTab() {
               <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">
                 Cash picture
               </h3>
-              <SectionBody text={sections.cash} />
+              <SectionBody
+                text={
+                  snapshot?.cashPictureLines?.length
+                    ? snapshot.cashPictureLines.join("\n")
+                    : sections.cash
+                }
+              />
             </div>
             <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 p-3">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 mb-1.5">

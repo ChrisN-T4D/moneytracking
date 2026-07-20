@@ -16,12 +16,12 @@ type BriefCacheEntry = {
 const briefCache = new Map<string, BriefCacheEntry>();
 
 function parseSections(raw: string): { cash: string; spend: string; cuts: string } {
-  const cash = sliceSection(raw, "Cash picture", "Spend reality");
   const spend = sliceSection(raw, "Spend reality", "Cut list");
   const cuts = sliceSection(raw, "Cut list", null);
+  // Legacy: if model still emits Cash picture, ignore it for cash (UI uses snapshot).
   return {
-    cash: cash || raw.slice(0, 800),
-    spend: spend || "",
+    cash: "",
+    spend: spend || raw.slice(0, 800),
     cuts: cuts || "",
   };
 }
@@ -62,7 +62,11 @@ export async function POST(request: Request) {
       if (hit && hit.nextPaydayYmd === snapshot.window.nextPaydayYmd) {
         return NextResponse.json({
           ok: true,
-          sections: hit.sections,
+          sections: {
+            cash: snapshot.cashPictureLines.join("\n"),
+            spend: hit.sections.spend,
+            cuts: hit.sections.cuts,
+          },
           snapshotMeta: {
             todayYmd: snapshot.window.todayYmd,
             nextPaydayYmd: snapshot.window.nextPaydayYmd,
@@ -77,6 +81,7 @@ export async function POST(request: Request) {
 
     const compact = {
       window: snapshot.window,
+      cashPictureLines: snapshot.cashPictureLines,
       accounts: snapshot.accounts,
       paychecksNearWindow: snapshot.paychecksNearWindow,
       largeUpcomingBills: snapshot.largeUpcomingBills.slice(0, 12),
@@ -95,12 +100,17 @@ export async function POST(request: Request) {
       messages: [
         {
           role: "user",
-          content: `Write the paycheck brief from this snapshot JSON:\n${JSON.stringify(compact)}`,
+          content: `Write Spend reality and Cut list only from this snapshot JSON:\n${JSON.stringify(compact)}`,
         },
       ],
     });
 
-    const sections = parseSections(raw);
+    const parsed = parseSections(raw);
+    const sections = {
+      cash: snapshot.cashPictureLines.join("\n"),
+      spend: parsed.spend,
+      cuts: parsed.cuts,
+    };
     const generatedAt = new Date().toISOString();
     briefCache.set(cacheKey, {
       nextPaydayYmd: snapshot.window.nextPaydayYmd,
