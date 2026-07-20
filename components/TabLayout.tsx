@@ -9,16 +9,19 @@ interface Tab {
 
 const TABS: Tab[] = [
   { id: "checkin", label: "Check-In" },
+  { id: "analyze", label: "Analyze" },
   { id: "goals", label: "Goals" },
   { id: "bills", label: "Bills" },
 ];
 
 export function TabLayout({
   checkinContent,
+  analyzeContent,
   goalsContent,
   billsContent,
 }: {
   checkinContent: ReactNode;
+  analyzeContent: ReactNode;
   goalsContent: ReactNode;
   billsContent: ReactNode;
 }) {
@@ -44,6 +47,7 @@ export function TabLayout({
       </div>
       <div>
         {activeTab === "checkin" && <Fragment key="checkin">{checkinContent}</Fragment>}
+        {activeTab === "analyze" && <Fragment key="analyze">{analyzeContent}</Fragment>}
         {activeTab === "goals" && <Fragment key="goals">{goalsContent}</Fragment>}
         {activeTab === "bills" && <Fragment key="bills">{billsContent}</Fragment>}
       </div>

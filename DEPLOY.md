@@ -21,6 +21,10 @@ The app needs your **PocketBase admin email and password** for server-side API c
    - `POCKETBASE_ADMIN_EMAIL` = the email you use to log into the PocketBase admin UI
    - `POCKETBASE_ADMIN_PASSWORD` = that accountÃ¢â‚¬â„¢s password
 
+For the **Analyze** tab (paycheck brief + chat via Ollama on neu2), also set:
+   - `OLLAMA_BASE_URL` = `http://192.168.50.112:11434` (neu2 LAN; must be reachable from the app container)
+   - `OLLAMA_MODEL` = `qwythos:9b` (or another model on that Ollama)
+
 2. **Env file on the server:** Create a file on the server (e.g. `~/neu-money-tracking.env`) with the same variables. Do **not** commit this file or put it in the repo. In Portainer, point the stack/container to it via **Env** Ã¢â€ â€™ **Load from file** (or use `env_file` in docker-compose and mount the path).
 
 These values are **server-only** (no `NEXT_PUBLIC_`), so they are not embedded in the browser. Never add them to the repo or `.env.example` with real values.

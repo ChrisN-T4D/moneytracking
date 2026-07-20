@@ -8,6 +8,7 @@ import { HeaderAuth } from "@/components/HeaderAuth";
 import { AuthenticatedContent } from "@/components/AuthenticatedContent";
 import { DraggableSectionCards } from "@/components/DraggableSectionCards";
 import { RecurringTab } from "@/components/RecurringTab";
+import { AnalyzeTab } from "@/components/AnalyzeTab";
 import { TabLayout } from "@/components/TabLayout";
 import { PbRealtimeRefresh } from "@/components/PbRealtimeRefresh";
 import { PaycheckManagement } from "@/components/PaycheckManagement";
@@ -733,6 +734,7 @@ function MainContent({
                 }}
               />
             }
+            analyzeContent={<AnalyzeTab />}
             goalsContent={<GoalsSection />}
             billsContent={
               <div className="space-y-6">
