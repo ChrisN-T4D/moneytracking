@@ -3,8 +3,11 @@
  */
 
 export function getOllamaConfig(): { baseUrl: string; model: string } {
-  const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://192.168.50.112:11434").replace(/\/$/, "");
-  const model = process.env.OLLAMA_MODEL ?? "qwythos:9b";
+  const baseUrl = (process.env.OLLAMA_BASE_URL?.trim() || "http://192.168.50.112:11434").replace(
+    /\/$/,
+    ""
+  );
+  const model = process.env.OLLAMA_MODEL?.trim() || "qwythos:9b";
   return { baseUrl, model };
 }
 
