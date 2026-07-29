@@ -31,9 +31,20 @@ export type SpendCategory = (typeof SPEND_CATEGORIES)[number];
 export type Cadence = "monthly" | "biweekly" | "variable" | "income" | "transfer";
 
 const SPEND_CATEGORY_SET = new Set<string>(SPEND_CATEGORIES);
+const CADENCE_SET = new Set<string>([
+  "monthly",
+  "biweekly",
+  "variable",
+  "income",
+  "transfer",
+] satisfies Cadence[]);
 
 export function isSpendCategory(s: string): s is SpendCategory {
   return SPEND_CATEGORY_SET.has(s);
+}
+
+export function isCadence(s: string): s is Cadence {
+  return CADENCE_SET.has(s);
 }
 
 export function normalizeSpendCategory(s: string): SpendCategory {

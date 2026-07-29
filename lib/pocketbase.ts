@@ -771,6 +771,55 @@ export async function updateStatementCategory(
   return res.ok;
 }
 
+interface PbCategoryCorrection {
+  id: string;
+  statementId?: string;
+  pattern?: string;
+  fromCategory?: string | null;
+  toCategory?: string;
+  fromCadence?: string | null;
+  toCadence?: string;
+  createdAt?: string;
+}
+
+function mapCategoryCorrections(items: PbCategoryCorrection[]): StatementCategoryCorrection[] {
+  return (items ?? []).map((item) => ({
+    statementId: String(item.statementId ?? ""),
+    pattern: String(item.pattern ?? ""),
+    fromCategory: item.fromCategory ?? null,
+    toCategory: String(item.toCategory ?? ""),
+    fromCadence: item.fromCadence ?? null,
+    toCadence: String(item.toCadence ?? ""),
+    createdAt: String(item.createdAt ?? ""),
+  }));
+}
+
+/** Fetch category corrections (admin auth when configured). */
+export async function getCategoryCorrections(): Promise<StatementCategoryCorrection[]> {
+  if (!POCKETBASE_URL) return [];
+  const path = "/api/collections/statement_category_corrections/records?perPage=500&sort=-createdAt";
+  try {
+    const auth = await getStatementAdminAuth();
+    if (auth) {
+      const url = `${auth.baseUrl.replace(/\/$/, "")}${path}`;
+      const res = await fetch(url, {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as PbListResponse<PbCategoryCorrection>;
+        return mapCategoryCorrections(data.items ?? []);
+      }
+    }
+    const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as PbListResponse<PbCategoryCorrection>;
+    return mapCategoryCorrections(data.items ?? []);
+  } catch {
+    return [];
+  }
+}
+
 /** Append a user category/cadence correction (admin auth when configured). */
 export async function createCategoryCorrection(
   row: StatementCategoryCorrection
