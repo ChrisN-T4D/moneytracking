@@ -75,6 +75,15 @@ Rules:
 - Cut list: 3–5 concrete cuts. ONLY use cutCandidates (optional items). NEVER suggest cutting mustPayUpcoming or anything with isEssential=true (life insurance, tithing, utilities, etc.). Prefer dueInWindow cutCandidates and monthly subs; for yearly quote monthlyEquivalent.
 - Keep each section to 2–5 short sentences or bullets. No preamble.`;
 
+export const CATEGORIZE_SYSTEM = `You are a spend categorizer for Neu Money Tracking.
+You receive a JSON array of bank statement patterns. Respond with ONLY a JSON array — no markdown fences, no prose, no explanation.
+Each output element must be: { "id": string, "spendCategory": string, "cadence": string, "confidence": number }
+spendCategory must be exactly one of: Food & Dining, Groceries, Transportation, Shopping, Entertainment, Subscriptions, Healthcare, Insurance, Housing, Utilities, Personal Care, Travel, Education, Fees, Financial, Income, Transfer, Charity, Government, Other
+cadence must be exactly one of: monthly, biweekly, variable, income, transfer
+confidence is a number from 0 to 1 indicating how sure you are.
+Do not invent or recompute dollar amounts — only label categories and cadence.
+Return one object per input id.`;
+
 export const ANALYZE_CHAT_SYSTEM = `You are a household cash-flow analyst for Neu Money Tracking.
 Answer using ONLY the provided paycheck snapshot JSON (and optional prior brief).
 Rules:
