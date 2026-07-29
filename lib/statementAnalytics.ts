@@ -1,6 +1,16 @@
 import { makeStatementPattern } from "@/lib/statementTagging";
 import type { StatementRecord } from "@/lib/types";
 
+export type StatementAnalyticsLine = {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  spendCategory: string | null;
+  cadence: string | null;
+  sourceFile: string | null;
+};
+
 export type StatementAnalytics = {
   byCadence: { cadence: string; amount: number; count: number }[];
   byCategory: { category: string; amount: number; count: number }[];
@@ -13,6 +23,7 @@ export type StatementAnalytics = {
     cadence: string | null;
   }[];
   newSinceLastImport: { pattern: string; amount: number; count: number }[];
+  lines: StatementAnalyticsLine[];
   uncategorizedCount: number;
   meta: {
     from: string | null;
@@ -133,6 +144,22 @@ export function buildStatementAnalytics(
 ): StatementAnalytics {
   const filtered = filterStatements(statements, options);
   const latestSourceFile = findLatestSourceFile(statements);
+  const lines = [...filtered]
+    .sort((a, b) => {
+      const aDate = statementDayYmd(a) ?? a.date ?? "";
+      const bDate = statementDayYmd(b) ?? b.date ?? "";
+      return bDate.localeCompare(aDate);
+    })
+    .slice(0, 500)
+    .map((s) => ({
+      id: s.id,
+      date: statementDayYmd(s) ?? s.date,
+      description: s.description,
+      amount: s.amount,
+      spendCategory: s.spendCategory ?? null,
+      cadence: s.cadence ?? null,
+      sourceFile: s.sourceFile ?? null,
+    }));
 
   const cadenceMap = new Map<string, { amount: number; count: number }>();
   for (const cadence of EXPENSE_CADENCES) {
@@ -263,6 +290,7 @@ export function buildStatementAnalytics(
     trends,
     topMerchants,
     newSinceLastImport,
+    lines,
     uncategorizedCount,
     meta: {
       from: options?.from?.slice(0, 10) ?? null,
