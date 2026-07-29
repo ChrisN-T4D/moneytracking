@@ -2,9 +2,11 @@
 
 import { formatCurrency } from "@/lib/format";
 import type { StatementAnalytics } from "@/lib/statementAnalytics";
+import type { AnalyticsCadenceFilter } from "./CadenceOverview";
 
 type NewVsKnownSectionProps = {
   analytics: StatementAnalytics;
+  selectedCadence: AnalyticsCadenceFilter;
 };
 
 function formatDateTime(value: string | null): string {
@@ -19,11 +21,17 @@ function formatDateTime(value: string | null): string {
   });
 }
 
-export function NewVsKnownSection({ analytics }: NewVsKnownSectionProps) {
-  const rows = analytics.newSinceLastImport.slice(0, 8);
+export function NewVsKnownSection({ analytics, selectedCadence }: NewVsKnownSectionProps) {
+  const newRows = selectedCadence
+    ? (analytics.newSinceLastImportByCadence[selectedCadence] ?? [])
+    : analytics.newSinceLastImport;
+  const rows = newRows.slice(0, 8);
   const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
-  const newCount = analytics.newSinceLastImport.reduce((sum, row) => sum + row.count, 0);
-  const knownCount = Math.max(analytics.meta.statementCount - newCount, 0);
+  const newCount = newRows.reduce((sum, row) => sum + row.count, 0);
+  const expenseRowCount = selectedCadence
+    ? (analytics.byCadence.find((item) => item.cadence === selectedCadence)?.count ?? 0)
+    : analytics.byCadence.reduce((sum, item) => sum + item.count, 0);
+  const knownCount = Math.max(expenseRowCount - newCount, 0);
 
   return (
     <section className="rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-4 shadow-sm">
@@ -32,7 +40,9 @@ export function NewVsKnownSection({ analytics }: NewVsKnownSectionProps) {
           New vs known
         </h2>
         <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-          New merchant patterns from the latest source file.
+          {selectedCadence
+            ? `New ${selectedCadence} merchant patterns from the latest source file.`
+            : "New merchant patterns from the latest source file."}
         </p>
       </div>
 

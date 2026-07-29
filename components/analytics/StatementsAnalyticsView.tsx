@@ -180,7 +180,7 @@ export function StatementsAnalyticsView() {
               selectedCadence={selectedCadence}
               onSelectCadence={setSelectedCadence}
             />
-            <NewVsKnownSection analytics={analytics} />
+            <NewVsKnownSection analytics={analytics} selectedCadence={selectedCadence} />
           </div>
 
           <div className="grid gap-4 xl:grid-cols-3">

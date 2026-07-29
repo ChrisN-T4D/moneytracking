@@ -1,7 +1,7 @@
 "use client";
 
 import { formatCurrency } from "@/lib/format";
-import type { StatementAnalytics, StatementAnalyticsLine } from "@/lib/statementAnalytics";
+import type { StatementAnalytics } from "@/lib/statementAnalytics";
 import type { AnalyticsCadenceFilter } from "./CadenceOverview";
 
 type CategoryBreakdownProps = {
@@ -9,37 +9,13 @@ type CategoryBreakdownProps = {
   selectedCadence: AnalyticsCadenceFilter;
 };
 
-function lineCadence(line: StatementAnalyticsLine): string {
-  return line.cadence ?? (line.amount < 0 ? "variable" : "");
-}
-
-function isExpenseLine(line: StatementAnalyticsLine): boolean {
-  return line.amount < 0 && line.cadence !== "income" && line.cadence !== "transfer";
-}
-
-function filteredCategoryRows(
-  analytics: StatementAnalytics,
-  selectedCadence: AnalyticsCadenceFilter
-) {
+function categoryRows(analytics: StatementAnalytics, selectedCadence: AnalyticsCadenceFilter) {
   if (!selectedCadence) return analytics.byCategory;
-
-  const map = new Map<string, { amount: number; count: number }>();
-  for (const line of analytics.lines) {
-    if (!isExpenseLine(line) || lineCadence(line) !== selectedCadence) continue;
-    const category = line.spendCategory ?? "Uncategorized";
-    const entry = map.get(category) ?? { amount: 0, count: 0 };
-    entry.amount += Math.abs(line.amount);
-    entry.count += 1;
-    map.set(category, entry);
-  }
-
-  return [...map.entries()]
-    .map(([category, entry]) => ({ category, amount: entry.amount, count: entry.count }))
-    .sort((a, b) => b.amount - a.amount);
+  return analytics.byCategoryByCadence[selectedCadence] ?? [];
 }
 
 export function CategoryBreakdown({ analytics, selectedCadence }: CategoryBreakdownProps) {
-  const rows = filteredCategoryRows(analytics, selectedCadence).slice(0, 10);
+  const rows = categoryRows(analytics, selectedCadence).slice(0, 10);
   const total = rows.reduce((sum, row) => sum + row.amount, 0);
   const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
 

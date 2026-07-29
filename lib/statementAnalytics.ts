@@ -11,9 +11,12 @@ export type StatementAnalyticsLine = {
   sourceFile: string | null;
 };
 
+export type CategoryAggregate = { category: string; amount: number; count: number };
+
 export type StatementAnalytics = {
   byCadence: { cadence: string; amount: number; count: number }[];
-  byCategory: { category: string; amount: number; count: number }[];
+  byCategory: CategoryAggregate[];
+  byCategoryByCadence: Record<string, CategoryAggregate[]>;
   trends: { month: string; outflow: number; byCadence: Record<string, number> }[];
   topMerchants: {
     pattern: string;
@@ -23,6 +26,7 @@ export type StatementAnalytics = {
     cadence: string | null;
   }[];
   newSinceLastImport: { pattern: string; amount: number; count: number }[];
+  newSinceLastImportByCadence: Record<string, { pattern: string; amount: number; count: number }[]>;
   lines: StatementAnalyticsLine[];
   uncategorizedCount: number;
   meta: {
@@ -167,6 +171,10 @@ export function buildStatementAnalytics(
   }
 
   const categoryMap = new Map<string, { amount: number; count: number }>();
+  const categoryByCadenceMaps = new Map<string, Map<string, { amount: number; count: number }>>();
+  for (const cadence of EXPENSE_CADENCES) {
+    categoryByCadenceMaps.set(cadence, new Map());
+  }
   const trendMap = new Map<
     string,
     { outflow: number; byCadence: Record<string, number> }
@@ -182,6 +190,10 @@ export function buildStatementAnalytics(
     }
   >();
   const newPatternMap = new Map<string, { amount: number; count: number }>();
+  const newPatternByCadenceMaps = new Map<string, Map<string, { amount: number; count: number }>>();
+  for (const cadence of EXPENSE_CADENCES) {
+    newPatternByCadenceMaps.set(cadence, new Map());
+  }
 
   let uncategorizedCount = 0;
   let lastCategorizedAt: string | null = null;
@@ -210,6 +222,12 @@ export function buildStatementAnalytics(
       const cadenceEntry = cadenceMap.get(cadence)!;
       cadenceEntry.amount += amt;
       cadenceEntry.count += 1;
+
+      const cadenceCategoryMap = categoryByCadenceMaps.get(cadence)!;
+      const cadenceCatEntry = cadenceCategoryMap.get(category) ?? { amount: 0, count: 0 };
+      cadenceCatEntry.amount += amt;
+      cadenceCatEntry.count += 1;
+      cadenceCategoryMap.set(category, cadenceCatEntry);
     }
 
     const catEntry = categoryMap.get(category) ?? { amount: 0, count: 0 };
@@ -250,6 +268,14 @@ export function buildStatementAnalytics(
       newEntry.amount += amt;
       newEntry.count += 1;
       newPatternMap.set(pattern, newEntry);
+
+      if (EXPENSE_CADENCES.includes(cadence as (typeof EXPENSE_CADENCES)[number])) {
+        const cadenceNewMap = newPatternByCadenceMaps.get(cadence)!;
+        const cadenceNewEntry = cadenceNewMap.get(pattern) ?? { amount: 0, count: 0 };
+        cadenceNewEntry.amount += amt;
+        cadenceNewEntry.count += 1;
+        cadenceNewMap.set(pattern, cadenceNewEntry);
+      }
     }
   }
 
@@ -261,6 +287,16 @@ export function buildStatementAnalytics(
   const byCategory = [...categoryMap.entries()]
     .map(([category, { amount, count }]) => ({ category, amount, count }))
     .sort((a, b) => b.amount - a.amount);
+
+  const byCategoryByCadence = Object.fromEntries(
+    EXPENSE_CADENCES.map((cadence) => {
+      const cadenceCategoryMap = categoryByCadenceMaps.get(cadence)!;
+      const rows = [...cadenceCategoryMap.entries()]
+        .map(([category, { amount, count }]) => ({ category, amount, count }))
+        .sort((a, b) => b.amount - a.amount);
+      return [cadence, rows];
+    })
+  );
 
   const trends = [...trendMap.entries()]
     .map(([month, { outflow, byCadence: monthCadence }]) => ({
@@ -284,12 +320,24 @@ export function buildStatementAnalytics(
     .map(([pattern, { amount, count }]) => ({ pattern, amount, count }))
     .sort((a, b) => b.amount - a.amount);
 
+  const newSinceLastImportByCadence = Object.fromEntries(
+    EXPENSE_CADENCES.map((cadence) => {
+      const cadenceNewMap = newPatternByCadenceMaps.get(cadence)!;
+      const rows = [...cadenceNewMap.entries()]
+        .map(([pattern, { amount, count }]) => ({ pattern, amount, count }))
+        .sort((a, b) => b.amount - a.amount);
+      return [cadence, rows];
+    })
+  );
+
   return {
     byCadence,
     byCategory,
+    byCategoryByCadence,
     trends,
     topMerchants,
     newSinceLastImport,
+    newSinceLastImportByCadence,
     lines,
     uncategorizedCount,
     meta: {

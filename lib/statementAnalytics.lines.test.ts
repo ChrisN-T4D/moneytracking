@@ -65,3 +65,41 @@ test("buildStatementAnalytics returns latest 500 filtered lines sorted by date d
     analytics.lines.every((line, index, lines) => index === 0 || lines[index - 1]!.date >= line.date)
   );
 });
+
+test("buildStatementAnalytics byCategoryByCadence uses full filtered set, not capped lines", () => {
+  const many = Array.from({ length: 501 }, (_, index) =>
+    statement({
+      id: `line-${index}`,
+      date: `2026-01-${String((index % 28) + 1).padStart(2, "0")}`,
+      description: `Merchant ${index}`,
+      amount: -(index + 1),
+      account: "Checking",
+      spendCategory: index % 2 === 0 ? "Groceries" : "Dining",
+      cadence: index % 3 === 0 ? "monthly" : "variable",
+    })
+  );
+
+  const analytics = buildStatementAnalytics(many, {
+    from: "2026-01-01",
+    to: "2026-01-31",
+    account: "Checking",
+  });
+
+  assert.equal(analytics.lines.length, 500);
+
+  const monthlyGroceries = analytics.byCategoryByCadence.monthly?.find(
+    (row) => row.category === "Groceries"
+  );
+  const expectedMonthlyGroceries = many.filter(
+    (row) =>
+      row.cadence === "monthly" &&
+      row.spendCategory === "Groceries" &&
+      row.amount < 0
+  );
+
+  assert.equal(monthlyGroceries?.count, expectedMonthlyGroceries.length);
+  assert.equal(
+    monthlyGroceries?.amount,
+    expectedMonthlyGroceries.reduce((sum, row) => sum + Math.abs(row.amount), 0)
+  );
+});
