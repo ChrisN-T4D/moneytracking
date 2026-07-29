@@ -9,6 +9,7 @@ import type {
   SpanishForkBill,
   Summary,
   StatementRecord,
+  StatementCategoryCorrection,
   StatementTagRule,
   StatementTagTargetType,
   MoneyGoal,
@@ -668,6 +669,12 @@ interface PbStatement {
   targetType?: string | null;
   targetSection?: string | null;
   targetName?: string | null;
+  spendCategory?: string | null;
+  cadence?: string | null;
+  categorySource?: string | null;
+  categoryConfidence?: number | null;
+  categorizedAt?: string | null;
+  categoryModel?: string | null;
 }
 
 function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
@@ -693,8 +700,104 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
       targetType: str("targetType") as StatementRecord["targetType"],
       targetSection: str("targetSection") as StatementRecord["targetSection"],
       targetName: str("targetName"),
+      spendCategory: str("spendCategory"),
+      cadence: str("cadence"),
+      categorySource: str("categorySource"),
+      categoryConfidence:
+        raw.categoryConfidence != null && raw.categoryConfidence !== ""
+          ? Number(raw.categoryConfidence)
+          : null,
+      categorizedAt: str("categorizedAt"),
+      categoryModel: str("categoryModel"),
     };
   });
+}
+
+export type StatementCategoryUpdateFields = Pick<
+  StatementRecord,
+  | "spendCategory"
+  | "cadence"
+  | "categorySource"
+  | "categoryConfidence"
+  | "categorizedAt"
+  | "categoryModel"
+>;
+
+async function getStatementAdminAuth(): Promise<{
+  token: string;
+  baseUrl: string;
+} | null> {
+  const apiBase = POCKETBASE_API_URL || BASE;
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  if (!apiBase || !email || !password) return null;
+  try {
+    return await getAdminToken(apiBase, email, password);
+  } catch {
+    return null;
+  }
+}
+
+/** PATCH statement category fields (admin auth when configured). */
+export async function updateStatementCategory(
+  id: string,
+  fields: Partial<StatementCategoryUpdateFields>
+): Promise<boolean> {
+  if (!POCKETBASE_URL) return false;
+  const auth = await getStatementAdminAuth();
+  if (!auth) return false;
+
+  const body: Record<string, unknown> = {};
+  if ("spendCategory" in fields) body.spendCategory = fields.spendCategory ?? "";
+  if ("cadence" in fields) body.cadence = fields.cadence ?? "";
+  if ("categorySource" in fields) body.categorySource = fields.categorySource ?? "";
+  if ("categoryConfidence" in fields) {
+    body.categoryConfidence =
+      fields.categoryConfidence != null ? Number(fields.categoryConfidence) : null;
+  }
+  if ("categorizedAt" in fields) body.categorizedAt = fields.categorizedAt ?? "";
+  if ("categoryModel" in fields) body.categoryModel = fields.categoryModel ?? "";
+
+  const url = `${auth.baseUrl.replace(/\/$/, "")}/api/collections/statements/records/${id}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${auth.token}`,
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  return res.ok;
+}
+
+/** Append a user category/cadence correction (admin auth when configured). */
+export async function createCategoryCorrection(
+  row: StatementCategoryCorrection
+): Promise<boolean> {
+  if (!POCKETBASE_URL) return false;
+  const auth = await getStatementAdminAuth();
+  if (!auth) return false;
+
+  const url = `${auth.baseUrl.replace(/\/$/, "")}/api/collections/statement_category_corrections/records`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${auth.token}`,
+    },
+    body: JSON.stringify({
+      statementId: row.statementId,
+      pattern: row.pattern,
+      fromCategory: row.fromCategory ?? "",
+      toCategory: row.toCategory,
+      fromCadence: row.fromCadence ?? "",
+      toCadence: row.toCadence,
+      createdAt: row.createdAt,
+    }),
+    cache: "no-store",
+  });
+  return res.ok;
 }
 
 /** Fetch statement records from PocketBase. Uses no-store so "Paid this month" and other statement-derived data stay fresh after refresh.
