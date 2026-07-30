@@ -146,7 +146,7 @@ export async function categorizeStatementsWithOllama(options: {
   userOverridesByPattern: Map<string, { spendCategory: string; cadence: Cadence }>;
   force?: boolean;
 }): Promise<CategorizeResultRow[]> {
-  const { rows, userOverridesByPattern, force = false } = options;
+  const { rows, userOverridesByPattern } = options;
   const results: CategorizeResultRow[] = [];
   const ollamaQueue: PatternGroup[] = [];
 
@@ -165,37 +165,36 @@ export async function categorizeStatementsWithOllama(options: {
       continue;
     }
 
-    if (!force && group.rows.some((row) => isTransferDescription(row.description))) {
-      for (const row of group.rows) {
-        results.push({
-          id: row.id,
-          spendCategory: "Transfer",
-          cadence: "transfer",
-          confidence: 1,
-          categorySource: "heuristic",
-        });
-      }
+    const transferRows = group.rows.filter((row) => isTransferDescription(row.description));
+    for (const row of transferRows) {
+      results.push({
+        id: row.id,
+        spendCategory: "Transfer",
+        cadence: "transfer",
+        confidence: 1,
+        categorySource: "heuristic",
+      });
+    }
+
+    const nonTransferRows = group.rows.filter((row) => !isTransferDescription(row.description));
+    const incomeRows = nonTransferRows.filter((row) => row.amount > 0);
+    const ollamaRows = nonTransferRows.filter((row) => row.amount <= 0);
+
+    for (const row of incomeRows) {
+      results.push({
+        id: row.id,
+        spendCategory: "Income",
+        cadence: "income",
+        confidence: 1,
+        categorySource: "heuristic",
+      });
+    }
+
+    if (ollamaRows.length === 0) {
       continue;
     }
 
-    if (!force) {
-      const incomeRows = group.rows.filter((row) => row.amount > 0);
-      const nonIncomeRows = group.rows.filter((row) => row.amount <= 0);
-      for (const row of incomeRows) {
-        results.push({
-          id: row.id,
-          spendCategory: "Income",
-          cadence: "income",
-          confidence: 1,
-          categorySource: "heuristic",
-        });
-      }
-      if (nonIncomeRows.length === 0) continue;
-      ollamaQueue.push({ pattern: group.pattern, rows: nonIncomeRows });
-      continue;
-    }
-
-    ollamaQueue.push(group);
+    ollamaQueue.push({ pattern: group.pattern, rows: ollamaRows });
   }
 
   for (let i = 0; i < ollamaQueue.length; i += BATCH_SIZE) {

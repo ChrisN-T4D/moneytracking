@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
-import { ensureStatementCategoryFields } from "@/lib/ensurePbStatementCategoryFields";
+import {
+  ensureStatementCategoryFields,
+  StatementCategorySchemaError,
+} from "@/lib/ensurePbStatementCategoryFields";
 import { categorizeStatementsWithOllama } from "@/lib/ollamaCategorizer";
 import { getOllamaConfig, OllamaUnavailableError } from "@/lib/ollamaClient";
 import {
   getCategoryCorrections,
   getStatements,
   updateStatementCategory,
+  verifyStatementCategoryAdminAuth,
 } from "@/lib/pocketbase";
 import { getTokenFromCookie } from "@/lib/pocketbase-auth";
 import type { Cadence } from "@/lib/spendTaxonomy";
@@ -44,11 +48,7 @@ function selectStatementsForCategorization(
 
   for (const statement of scoped) {
     if (statement.categorySource === "user") {
-      if (force && explicitIdSet.has(statement.id)) {
-        toProcess.push(statement);
-      } else {
-        skippedUser++;
-      }
+      skippedUser++;
       continue;
     }
 
@@ -88,7 +88,28 @@ export async function POST(request: Request) {
     // empty body is valid
   }
 
-  await ensureStatementCategoryFields(pbBase);
+  const adminReady = await verifyStatementCategoryAdminAuth();
+  if (!adminReady.ok) {
+    return NextResponse.json(
+      { ok: false, message: adminReady.message },
+      { status: adminReady.status }
+    );
+  }
+
+  try {
+    await ensureStatementCategoryFields(pbBase);
+  } catch (e) {
+    if (e instanceof StatementCategorySchemaError) {
+      return NextResponse.json({ ok: false, message: e.message }, { status: e.status });
+    }
+    return NextResponse.json(
+      {
+        ok: false,
+        message: e instanceof Error ? e.message : "Statement category schema check failed.",
+      },
+      { status: 500 }
+    );
+  }
 
   const [statements, corrections] = await Promise.all([
     getStatements({ perPage: 1000, sort: "-date" }),
@@ -143,6 +164,21 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { ok: false, message: e instanceof Error ? e.message : "Categorization failed." },
       { status: 500 }
+    );
+  }
+
+  if (failed > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        categorized,
+        skippedUser,
+        failed,
+        model,
+        message:
+          "Could not persist one or more statement category updates. Verify PocketBase admin credentials and statement category schema fields.",
+      },
+      { status: 502 }
     );
   }
 

@@ -12,19 +12,21 @@ export type StatementAnalyticsLine = {
 };
 
 export type CategoryAggregate = { category: string; amount: number; count: number };
+export type MerchantAggregate = {
+  pattern: string;
+  amount: number;
+  count: number;
+  spendCategory: string | null;
+  cadence: string | null;
+};
 
 export type StatementAnalytics = {
   byCadence: { cadence: string; amount: number; count: number }[];
   byCategory: CategoryAggregate[];
   byCategoryByCadence: Record<string, CategoryAggregate[]>;
   trends: { month: string; outflow: number; byCadence: Record<string, number> }[];
-  topMerchants: {
-    pattern: string;
-    amount: number;
-    count: number;
-    spendCategory: string | null;
-    cadence: string | null;
-  }[];
+  topMerchants: MerchantAggregate[];
+  topMerchantsByCadence: Record<string, MerchantAggregate[]>;
   newSinceLastImport: { pattern: string; amount: number; count: number }[];
   newSinceLastImportByCadence: Record<string, { pattern: string; amount: number; count: number }[]>;
   lines: StatementAnalyticsLine[];
@@ -38,6 +40,8 @@ export type StatementAnalytics = {
 };
 
 const EXPENSE_CADENCES = ["monthly", "biweekly", "variable"] as const;
+
+type MerchantAggregateState = Omit<MerchantAggregate, "pattern"> & { latestDate: string };
 
 function statementDayYmd(s: StatementRecord): string | null {
   const d = (s.date ?? "").trim();
@@ -142,6 +146,44 @@ function isPatternNewSinceLastImport(
   return earliestInLatest;
 }
 
+function addMerchantAmount(
+  map: Map<string, MerchantAggregateState>,
+  pattern: string,
+  amount: number,
+  statement: StatementRecord,
+  ymd: string | null
+): void {
+  const merchant = map.get(pattern) ?? {
+    amount: 0,
+    count: 0,
+    spendCategory: statement.spendCategory ?? null,
+    cadence: statement.cadence ?? null,
+    latestDate: ymd ?? "",
+  };
+  merchant.amount += amount;
+  merchant.count += 1;
+  if (ymd && ymd >= merchant.latestDate) {
+    merchant.latestDate = ymd;
+    merchant.spendCategory = statement.spendCategory ?? null;
+    merchant.cadence = statement.cadence ?? null;
+  }
+  map.set(pattern, merchant);
+}
+
+function merchantRows(
+  map: Map<string, MerchantAggregateState>
+): MerchantAggregate[] {
+  return [...map.entries()]
+    .map(([pattern, { amount, count, spendCategory, cadence }]) => ({
+      pattern,
+      amount,
+      count,
+      spendCategory,
+      cadence,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
 export function buildStatementAnalytics(
   statements: StatementRecord[],
   options?: { from?: string; to?: string; account?: string }
@@ -181,14 +223,12 @@ export function buildStatementAnalytics(
   >();
   const merchantMap = new Map<
     string,
-    {
-      amount: number;
-      count: number;
-      spendCategory: string | null;
-      cadence: string | null;
-      latestDate: string;
-    }
+    MerchantAggregateState
   >();
+  const merchantByCadenceMaps = new Map<string, Map<string, MerchantAggregateState>>();
+  for (const cadence of EXPENSE_CADENCES) {
+    merchantByCadenceMaps.set(cadence, new Map());
+  }
   const newPatternMap = new Map<string, { amount: number; count: number }>();
   const newPatternByCadenceMaps = new Map<string, Map<string, { amount: number; count: number }>>();
   for (const cadence of EXPENSE_CADENCES) {
@@ -247,21 +287,10 @@ export function buildStatementAnalytics(
       trendMap.set(month, trend);
     }
 
-    const merchant = merchantMap.get(pattern) ?? {
-      amount: 0,
-      count: 0,
-      spendCategory: s.spendCategory ?? null,
-      cadence: s.cadence ?? null,
-      latestDate: ymd ?? "",
-    };
-    merchant.amount += amt;
-    merchant.count += 1;
-    if (ymd && ymd >= merchant.latestDate) {
-      merchant.latestDate = ymd;
-      merchant.spendCategory = s.spendCategory ?? null;
-      merchant.cadence = s.cadence ?? null;
+    addMerchantAmount(merchantMap, pattern, amt, s, ymd);
+    if (EXPENSE_CADENCES.includes(cadence as (typeof EXPENSE_CADENCES)[number])) {
+      addMerchantAmount(merchantByCadenceMaps.get(cadence)!, pattern, amt, s, ymd);
     }
-    merchantMap.set(pattern, merchant);
 
     if (isPatternNewSinceLastImport(pattern, statements, latestSourceFile)) {
       const newEntry = newPatternMap.get(pattern) ?? { amount: 0, count: 0 };
@@ -306,15 +335,13 @@ export function buildStatementAnalytics(
     }))
     .sort((a, b) => a.month.localeCompare(b.month));
 
-  const topMerchants = [...merchantMap.entries()]
-    .map(([pattern, { amount, count, spendCategory, cadence }]) => ({
-      pattern,
-      amount,
-      count,
-      spendCategory,
-      cadence,
-    }))
-    .sort((a, b) => b.amount - a.amount);
+  const topMerchants = merchantRows(merchantMap);
+
+  const topMerchantsByCadence = Object.fromEntries(
+    EXPENSE_CADENCES.map((cadence) => {
+      return [cadence, merchantRows(merchantByCadenceMaps.get(cadence)!)];
+    })
+  );
 
   const newSinceLastImport = [...newPatternMap.entries()]
     .map(([pattern, { amount, count }]) => ({ pattern, amount, count }))
@@ -336,6 +363,7 @@ export function buildStatementAnalytics(
     byCategoryByCadence,
     trends,
     topMerchants,
+    topMerchantsByCadence,
     newSinceLastImport,
     newSinceLastImportByCadence,
     lines,

@@ -31,6 +31,16 @@ const CORRECTIONS_COLLECTION = {
   ],
 };
 
+export class StatementCategorySchemaError extends Error {
+  status: number;
+
+  constructor(message: string, status = 500) {
+    super(message);
+    this.name = "StatementCategorySchemaError";
+    this.status = status;
+  }
+}
+
 async function ensureFieldsOnCollection(
   apiBase: string,
   adminToken: string,
@@ -41,7 +51,13 @@ async function ensureFieldsOnCollection(
     cache: "no-store",
     headers: { Authorization: `Bearer ${adminToken}` },
   });
-  if (!getRes.ok) return;
+  if (!getRes.ok) {
+    const text = await getRes.text().catch(() => "");
+    throw new StatementCategorySchemaError(
+      `Could not inspect PocketBase ${collectionName} collection for statement category fields: ${getRes.status} ${text}`,
+      502
+    );
+  }
 
   const col = (await getRes.json()) as { fields?: { name: string }[] };
   const fields = [...(col.fields ?? [])];
@@ -65,8 +81,9 @@ async function ensureFieldsOnCollection(
   });
   if (!patchRes.ok) {
     const text = await patchRes.text().catch(() => "");
-    console.warn(
-      `Could not add statement category fields to ${collectionName}: ${patchRes.status} ${text}`
+    throw new StatementCategorySchemaError(
+      `Could not add statement category fields to ${collectionName}: ${patchRes.status} ${text}`,
+      502
     );
   }
 }
@@ -89,8 +106,9 @@ async function ensureCorrectionsCollection(apiBase: string, adminToken: string):
   });
   if (!postRes.ok && postRes.status !== 400 && postRes.status !== 409) {
     const text = await postRes.text().catch(() => "");
-    console.warn(
-      `Could not create statement_category_corrections collection: ${postRes.status} ${text}`
+    throw new StatementCategorySchemaError(
+      `Could not create statement_category_corrections collection: ${postRes.status} ${text}`,
+      502
     );
   }
 }
@@ -99,7 +117,12 @@ async function ensureCorrectionsCollection(apiBase: string, adminToken: string):
 export async function ensureStatementCategoryFields(pbBase: string): Promise<void> {
   const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
   const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
-  if (!email || !password) return;
+  if (!email || !password) {
+    throw new StatementCategorySchemaError(
+      "PocketBase admin credentials are required to ensure statement category schema. Set POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD.",
+      500
+    );
+  }
 
   const adminBase =
     (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || pbBase;
@@ -108,6 +131,10 @@ export async function ensureStatementCategoryFields(pbBase: string): Promise<voi
     await ensureFieldsOnCollection(baseUrl, token, "statements");
     await ensureCorrectionsCollection(baseUrl, token);
   } catch (e) {
-    console.warn("ensureStatementCategoryFields:", e);
+    if (e instanceof StatementCategorySchemaError) throw e;
+    throw new StatementCategorySchemaError(
+      `PocketBase admin auth/schema check failed: ${e instanceof Error ? e.message : String(e)}`,
+      502
+    );
   }
 }

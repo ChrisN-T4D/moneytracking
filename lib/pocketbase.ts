@@ -684,6 +684,10 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
       const v = raw[key];
       return v != null && String(v).trim() !== "" ? String(v).trim() : null;
     };
+    const categoryConfidence =
+      raw.categoryConfidence != null && raw.categoryConfidence !== ""
+        ? Number(raw.categoryConfidence)
+        : null;
     return {
       id: item.id,
       date: String(raw.date ?? ""),
@@ -704,8 +708,8 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
       cadence: str("cadence"),
       categorySource: str("categorySource"),
       categoryConfidence:
-        raw.categoryConfidence != null && raw.categoryConfidence !== ""
-          ? Number(raw.categoryConfidence)
+        categoryConfidence != null && Number.isFinite(categoryConfidence)
+          ? categoryConfidence
           : null,
       categorizedAt: str("categorizedAt"),
       categoryModel: str("categoryModel"),
@@ -736,6 +740,42 @@ async function getStatementAdminAuth(): Promise<{
   } catch {
     return null;
   }
+}
+
+export async function verifyStatementCategoryAdminAuth(): Promise<
+  | { ok: true }
+  | { ok: false; message: string; status: number }
+> {
+  if (!POCKETBASE_URL) {
+    return {
+      ok: false,
+      status: 400,
+      message: "NEXT_PUBLIC_POCKETBASE_URL is not set; cannot persist statement categories.",
+    };
+  }
+
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  if (!email || !password) {
+    return {
+      ok: false,
+      status: 500,
+      message:
+        "PocketBase admin credentials are required to categorize statements. Set POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD so category fields can be persisted.",
+    };
+  }
+
+  const auth = await getStatementAdminAuth();
+  if (!auth) {
+    return {
+      ok: false,
+      status: 502,
+      message:
+        "PocketBase admin authentication failed; verify POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD, and POCKETBASE_API_URL.",
+    };
+  }
+
+  return { ok: true };
 }
 
 /** PATCH statement category fields (admin auth when configured). */
@@ -794,27 +834,57 @@ function mapCategoryCorrections(items: PbCategoryCorrection[]): StatementCategor
   }));
 }
 
+const CATEGORY_CORRECTIONS_PER_PAGE = 500;
+
+async function fetchCategoryCorrectionPages(
+  baseUrl: string,
+  headers?: Record<string, string>
+): Promise<StatementCategoryCorrection[] | null> {
+  const base = baseUrl.replace(/\/$/, "");
+  const allItems: PbCategoryCorrection[] = [];
+
+  for (let page = 1; ; page++) {
+    const params = new URLSearchParams({
+      page: String(page),
+      perPage: String(CATEGORY_CORRECTIONS_PER_PAGE),
+      sort: "-createdAt",
+    });
+    const res = await fetch(
+      `${base}/api/collections/statement_category_corrections/records?${params}`,
+      {
+        cache: "no-store",
+        ...(headers ? { headers } : {}),
+      }
+    );
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as PbListResponse<PbCategoryCorrection>;
+    const items = data.items ?? [];
+    allItems.push(...items);
+
+    const totalItems = Number(data.totalItems);
+    const perPage = Number(data.perPage) || CATEGORY_CORRECTIONS_PER_PAGE;
+    const currentPage = Number(data.page) || page;
+    if (items.length === 0 || (Number.isFinite(totalItems) && currentPage * perPage >= totalItems)) {
+      break;
+    }
+  }
+
+  return mapCategoryCorrections(allItems);
+}
+
 /** Fetch category corrections (admin auth when configured). */
 export async function getCategoryCorrections(): Promise<StatementCategoryCorrection[]> {
   if (!POCKETBASE_URL) return [];
-  const path = "/api/collections/statement_category_corrections/records?perPage=500&sort=-createdAt";
   try {
     const auth = await getStatementAdminAuth();
     if (auth) {
-      const url = `${auth.baseUrl.replace(/\/$/, "")}${path}`;
-      const res = await fetch(url, {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${auth.token}` },
+      const corrections = await fetchCategoryCorrectionPages(auth.baseUrl, {
+        Authorization: `Bearer ${auth.token}`,
       });
-      if (res.ok) {
-        const data = (await res.json()) as PbListResponse<PbCategoryCorrection>;
-        return mapCategoryCorrections(data.items ?? []);
-      }
+      if (corrections) return corrections;
     }
-    const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
-    if (!res.ok) return [];
-    const data = (await res.json()) as PbListResponse<PbCategoryCorrection>;
-    return mapCategoryCorrections(data.items ?? []);
+    return (await fetchCategoryCorrectionPages(BASE)) ?? [];
   } catch {
     return [];
   }

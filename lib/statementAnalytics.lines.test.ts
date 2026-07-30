@@ -103,3 +103,52 @@ test("buildStatementAnalytics byCategoryByCadence uses full filtered set, not ca
     expectedMonthlyGroceries.reduce((sum, row) => sum + Math.abs(row.amount), 0)
   );
 });
+
+test("buildStatementAnalytics tracks top merchant amounts separately by cadence", () => {
+  const analytics = buildStatementAnalytics([
+    statement({
+      id: "starbucks-monthly",
+      date: "2026-01-05",
+      description: "PURCHASE AUTHORIZED ON 01/05 STARBUCKS COFFEE OK",
+      amount: -4,
+      spendCategory: "Food & Dining",
+      cadence: "monthly",
+    }),
+    statement({
+      id: "starbucks-variable",
+      date: "2026-01-15",
+      description: "PURCHASE AUTHORIZED ON 01/15 STARBUCKS COFFEE OK",
+      amount: -8,
+      spendCategory: "Food & Dining",
+      cadence: "variable",
+    }),
+    statement({
+      id: "grocery-monthly",
+      date: "2026-01-10",
+      description: "PURCHASE AUTHORIZED ON 01/10 LOCAL GROCER OK",
+      amount: -25,
+      spendCategory: "Groceries",
+      cadence: "monthly",
+    }),
+  ]);
+
+  const combinedStarbucks = analytics.topMerchants.find(
+    (row) => row.pattern === "STARBUCKS COFFEE OK"
+  );
+  assert.equal(combinedStarbucks?.amount, 12);
+  assert.equal(combinedStarbucks?.count, 2);
+
+  const monthlyStarbucks = analytics.topMerchantsByCadence.monthly?.find(
+    (row) => row.pattern === "STARBUCKS COFFEE OK"
+  );
+  assert.equal(monthlyStarbucks?.amount, 4);
+  assert.equal(monthlyStarbucks?.count, 1);
+  assert.equal(monthlyStarbucks?.cadence, "monthly");
+
+  const variableStarbucks = analytics.topMerchantsByCadence.variable?.find(
+    (row) => row.pattern === "STARBUCKS COFFEE OK"
+  );
+  assert.equal(variableStarbucks?.amount, 8);
+  assert.equal(variableStarbucks?.count, 1);
+  assert.equal(variableStarbucks?.cadence, "variable");
+});
