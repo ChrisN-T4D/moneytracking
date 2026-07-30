@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { StatementsAnalyticsView } from "@/components/analytics/StatementsAnalyticsView";
 import type { StatementTagTargetType } from "@/lib/types";
 import { displayBillName } from "@/lib/format";
 
@@ -91,6 +92,7 @@ export default function StatementsPage() {
     subscriptions: [],
   });
   const [billNames, setBillNames] = useState<Record<string, string[]>>({});
+  const [linkToolsOpen, setLinkToolsOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   /** 1 = Upload, 2 = Paychecks, 3 = Add items */
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
@@ -166,10 +168,13 @@ export default function StatementsPage() {
     }
   }
 
-  // When opened from hamburger "Add paychecks from statements", scroll to this section
+  // When opened from hamburger "Add paychecks from statements", expose and scroll to this section.
   useEffect(() => {
     if (typeof window !== "undefined" && window.location.hash === "#fill-from-statements") {
-      document.getElementById("fill-from-statements")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setLinkToolsOpen(true);
+      window.requestAnimationFrame(() => {
+        document.getElementById("fill-from-statements")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     }
   }, []);
 
@@ -245,21 +250,6 @@ export default function StatementsPage() {
       setMessage(err instanceof Error ? err.message : "Upload failed.");
       return false;
     }
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    await runImport();
-  }
-
-  /** Import selected files (with duplicate check) then run analyze. If no files selected, just analyze. */
-  async function handleImportAndAnalyze(e: React.FormEvent) {
-    e.preventDefault();
-    if (files.length > 0) {
-      const ok = await runImport();
-      if (!ok) return;
-    }
-    await handleAnalyze();
   }
 
   async function handleAnalyze() {
@@ -523,16 +513,27 @@ export default function StatementsPage() {
 
   return (
     <main className="min-h-screen pb-safe bg-neutral-100 dark:bg-neutral-900 p-4">
-      <div className="max-w-lg mx-auto space-y-6">
+      <div className="mx-auto max-w-6xl space-y-6">
         <header>
-          <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
-            Statement uploads
+          <h1 className="text-2xl font-semibold text-neutral-900 dark:text-neutral-100">
+            Analytics
           </h1>
           <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
-            Upload Wells Fargo statement PDFs or any CSV. Stored in PocketBase in the <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">statements</code> collection.
+            Review statement trends, categorize spending, and import new activity.
           </p>
         </header>
 
+        <StatementsAnalyticsView />
+
+        <details
+          className="rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-4 shadow-sm"
+          open={linkToolsOpen}
+          onToggle={(e) => setLinkToolsOpen(e.currentTarget.open)}
+        >
+          <summary className="cursor-pointer text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            Link to bills &amp; paychecks
+          </summary>
+          <div className="mt-4 max-w-lg space-y-6">
         <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 space-y-4">
           <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 mb-2">
             Wells Fargo PDF + CSV
@@ -928,89 +929,45 @@ export default function StatementsPage() {
           </div>
         </div>
 
-        <form onSubmit={handleImportAndAnalyze} className="space-y-4">
-          <div>
-            <label htmlFor="file" className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-              CSV or PDF file(s) — select one or many
-            </label>
-            <input
-              key={fileInputKey}
-              id="file"
-              type="file"
-              accept=".csv,text/csv,application/csv,.pdf,application/pdf"
-              multiple
-              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-              className="mt-1 block w-full text-sm text-neutral-600 dark:text-neutral-400 file:mr-4 file:rounded file:border-0 file:bg-neutral-200 file:px-4 file:py-2 file:text-sm file:font-medium file:text-neutral-800 dark:file:bg-neutral-700 dark:file:text-neutral-200"
-            />
-            {files.length > 0 && (
-              <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                {files.length} file{files.length !== 1 ? "s" : ""} selected: {files.map((f) => f.name).join(", ")}
-              </p>
-            )}
-          </div>
-          <div>
-            <label htmlFor="account" className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-              Account (optional)
-            </label>
-            <input
-              id="account"
-              type="text"
-              value={account}
-              onChange={(e) => setAccount(e.target.value)}
-              placeholder="e.g. Checking, Bills"
-              className="mt-1 block w-full rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400"
-            />
-          </div>
+        <div className="rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 p-4 space-y-2">
           <button
-            type="submit"
-            disabled={status === "loading" || fillStatus === "loading"}
-            className="w-full rounded-lg bg-neutral-800 dark:bg-neutral-200 text-white dark:text-neutral-900 px-4 py-2.5 text-sm font-medium hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-50"
+            type="button"
+            onClick={handleResetTags}
+            disabled={resetTagsStatus === "loading"}
+            className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 px-4 py-2 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50"
           >
-            {status === "loading" ? "Uploading…" : fillStatus === "loading" ? "Analyzing…" : "Import and analyze"}
+            {resetTagsStatus === "loading" ? "Resetting…" : "Reset all tags"}
           </button>
-          <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            Imports CSV/PDF (duplicates skipped), then analyzes statements to suggest paychecks and bills. With no files selected, only analyzes existing statements.
+          <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+            Clears all categorization rules (e.g. Dog Grooming, Walmart). Use &quot;Add items to bills&quot; on the main page to re-tag from scratch.
           </p>
-          <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700 space-y-2">
-            <button
-              type="button"
-              onClick={handleResetTags}
-              disabled={resetTagsStatus === "loading"}
-              className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 px-4 py-2 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50"
+          {resetTagsMessage && (
+            <p
+              className={`text-xs ${
+                resetTagsStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"
+              }`}
             >
-              {resetTagsStatus === "loading" ? "Resetting…" : "Reset all tags"}
-            </button>
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-              Clears all categorization rules (e.g. Dog Grooming, Walmart). Use &quot;Add items to bills&quot; on the main page to re-tag from scratch.
+              {resetTagsMessage}
             </p>
-            {resetTagsMessage && (
-              <p
-                className={`text-xs ${
-                  resetTagsStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"
-                }`}
-              >
-                {resetTagsMessage}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={handleDeleteAll}
-              disabled={deleteAllStatus === "loading"}
-              className="w-full rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 px-4 py-2 text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/50 disabled:opacity-50"
+          )}
+          <button
+            type="button"
+            onClick={handleDeleteAll}
+            disabled={deleteAllStatus === "loading"}
+            className="w-full rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 px-4 py-2 text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/50 disabled:opacity-50"
+          >
+            {deleteAllStatus === "loading" ? "Deleting…" : "Delete all statements"}
+          </button>
+          {deleteAllMessage && (
+            <p
+              className={`text-xs ${
+                deleteAllStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"
+              }`}
             >
-              {deleteAllStatus === "loading" ? "Deleting…" : "Delete all statements"}
-            </button>
-            {deleteAllMessage && (
-              <p
-                className={`text-xs ${
-                  deleteAllStatus === "error" ? "text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"
-                }`}
-              >
-                {deleteAllMessage}
-              </p>
-            )}
-          </div>
-        </form>
+              {deleteAllMessage}
+            </p>
+          )}
+        </div>
 
         {status === "success" && (
           <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm text-emerald-800 dark:text-emerald-200">
@@ -1040,7 +997,7 @@ export default function StatementsPage() {
             Fill main page from statements
           </p>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-1">
-            Use <strong>Import and analyze</strong> above to upload then analyze, or use the button below to analyze existing statements only.
+            Use the wizard above to upload then analyze, or use the button below to analyze existing statements only.
           </p>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mb-3">
             Use your imported statements to suggest <strong>expected paychecks</strong> (from deposits like Gusto Payroll, Direct Deposit) and <strong>auto-transfers</strong> (recurring transfers to/from Way2Save). Select or deselect paychecks and bills before adding—only selected items are added. Bills show average cost from statements. If you see “0 statements” but you’ve imported data, set <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">POCKETBASE_ADMIN_EMAIL</code> and <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">POCKETBASE_ADMIN_PASSWORD</code> in <code className="bg-neutral-200 dark:bg-neutral-700 px-1 rounded">.env.local</code> so the app can read statements when the List rule is restricted.
@@ -1206,6 +1163,8 @@ export default function StatementsPage() {
             );
           })()}
         </div>
+          </div>
+        </details>
 
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
           <Link href="/" className="underline">
