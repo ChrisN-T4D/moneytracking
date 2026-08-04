@@ -86,7 +86,7 @@ export async function getPaychecks(): Promise<PaycheckConfig[]> {
         freq === "monthlyLastWorkingDay" ? "monthlyLastWorkingDay"
         : freq === "monthly" ? "monthly"
         : "biweekly";
-      const anchorRaw = (item.anchordate ?? "").trim();
+      const anchorRaw = (item.anchordate ?? (item as { anchorDate?: string }).anchorDate ?? "").trim();
       let anchorDate: string | null = null;
       if (anchorRaw) {
         const dateOnly = anchorRaw.substring(0, 10);

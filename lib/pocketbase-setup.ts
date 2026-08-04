@@ -218,7 +218,7 @@ export async function createCollections(
         textField("name", true),
         textField("frequency", true),
         textField("nextDue", true),
-        boolField("inThisPaycheck", true),
+        boolField("inThisPaycheck", false),
         numberField("amount", true),
         textField("autoTransferNote", false),
         textField("account", true),
@@ -248,7 +248,7 @@ export async function createCollections(
         textField("name", true),
         textField("frequency", true),
         textField("nextDue", true),
-        boolField("inThisPaycheck", true),
+        boolField("inThisPaycheck", false),
         numberField("amount", true),
         boolField("tenantPaid", false),
         textField("recurringPaidCycle", false),
@@ -283,7 +283,9 @@ export async function createCollections(
       fields: [
         textField("name", true),
         textField("frequency", true),
-        textField("anchorDate", false),
+        // Must match live app / pbFieldMap: paychecks.anchordate (all lowercase).
+        // Bool fields are optional: PocketBase treats required:true + false as blank.
+        textField("anchordate", false),
         numberField("dayOfMonth", false),
         numberField("amount", false),
         textField("paidThisMonthYearMonth", false),
@@ -380,12 +382,12 @@ async function createUserPreferencesCollection(
 
 /** Default section records (match current app order). */
 const defaultSections = [
-  { sortOrder: 0, type: "bills_list", title: "Bills (Bills Account)", subtitle: "Oklahoma bills", account: "bills_account", listType: "bills" },
-  { sortOrder: 1, type: "bills_list", title: "Subscriptions (Bills Account)", subtitle: "", account: "bills_account", listType: "subscriptions" },
-  { sortOrder: 2, type: "bills_list", title: "Bills (Checking Account)", subtitle: "Checking bills", account: "checking_account", listType: "bills" },
-  { sortOrder: 3, type: "bills_list", title: "Subscriptions (Checking Account)", subtitle: "", account: "checking_account", listType: "subscriptions" },
-  { sortOrder: 4, type: "spanish_fork", title: "Spanish Fork (Rental)", subtitle: "Bills with tenant paid amounts", account: "", listType: "" },
-  { sortOrder: 5, type: "auto_transfers", title: "Auto transfers", subtitle: "Money moved between accounts to cover what we need (e.g. to Bills account, Spanish Fork account). Fun money isn't tracked here.", account: "", listType: "" },
+  { sortOrder: 1, type: "bills_list", title: "Bills (Bills Account)", subtitle: "Oklahoma bills", account: "bills_account", listType: "bills" },
+  { sortOrder: 2, type: "bills_list", title: "Subscriptions (Bills Account)", subtitle: "", account: "bills_account", listType: "subscriptions" },
+  { sortOrder: 3, type: "bills_list", title: "Bills (Checking Account)", subtitle: "Checking bills", account: "checking_account", listType: "bills" },
+  { sortOrder: 4, type: "bills_list", title: "Subscriptions (Checking Account)", subtitle: "", account: "checking_account", listType: "subscriptions" },
+  { sortOrder: 5, type: "spanish_fork", title: "Spanish Fork (Rental)", subtitle: "Bills with tenant paid amounts", account: "", listType: "" },
+  { sortOrder: 6, type: "auto_transfers", title: "Auto transfers", subtitle: "Money moved between accounts to cover what we need (e.g. to Bills account, Spanish Fork account). Fun money isn't tracked here.", account: "", listType: "" },
 ];
 
 /** Seed all collections with data from lib/data.ts. */

@@ -6,6 +6,7 @@ export type MoneyHealthAccount = {
   key: string;
   label: string;
   balance: number | null;
+  plannedIn: number;
   projected: number | null;
   required: number;
 };
@@ -41,9 +42,13 @@ export function buildMoneyHealth(options: {
   const checkingProjected = checking?.projected ?? null;
   const checkingRequired = checking?.required ?? 0;
 
-  const anyAccountShort = accounts.some(
-    (a) => a.projected != null && a.projected < a.required
-  );
+  // Short when balance + planned in < required. Do not compare projected (already net of
+  // planned out) to required — that double-counts the same bills.
+  const anyAccountShort = accounts.some((a) => {
+    if (a.balance == null) return false;
+    const available = a.balance + a.plannedIn;
+    return a.required > 0 && available < a.required;
+  });
 
   const checkingUnknown = checking != null && checking.projected == null && checking.balance == null;
   if (checkingUnknown) {
@@ -57,9 +62,9 @@ export function buildMoneyHealth(options: {
   if (checkingUnknown) {
     flexibleLeftover = 0;
   } else {
+    // Projected already subtracts checking must-pays; only groceries remain to reserve.
     const base = checkingProjected ?? checking?.balance ?? 0;
-    flexibleLeftover =
-      Math.round((base - checkingRequired - groceries.remaining) * 100) / 100;
+    flexibleLeftover = Math.round((base - groceries.remaining) * 100) / 100;
   }
   const flexibleLeftoverDisplay = Math.max(0, flexibleLeftover);
 
@@ -99,7 +104,10 @@ export function buildMoneyHealth(options: {
 
   if (anyAccountShort) {
     const shortLabels = accounts
-      .filter((a) => a.projected != null && a.projected < a.required)
+      .filter((a) => {
+        if (a.balance == null) return false;
+        return a.required > 0 && a.balance + a.plannedIn < a.required;
+      })
       .map((a) => a.label);
     if (shortLabels.length) {
       statusLines.push(`Short vs required: ${shortLabels.join(", ")}.`);

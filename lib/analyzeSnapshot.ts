@@ -489,9 +489,14 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
     n == null || Number.isNaN(n) ? "—" : `$${Math.round(n * 100) / 100}`;
 
   const cashPictureLines: string[] = accounts.map((a) => {
+    const available = a.balance == null ? null : a.balance + a.plannedIn;
     const enough =
-      a.projected == null ? "balance unknown" : a.projected >= a.required ? "enough for required" : "short vs required";
-    return `${a.label}: balance ${fmt(a.balance)}, planned in ${fmt(a.plannedIn)}, planned out ${fmt(a.plannedOut)}, projected ${fmt(a.projected)}, required ${fmt(a.required)} (${enough}).`;
+      available == null
+        ? "balance unknown"
+        : available >= a.required
+          ? "enough for required"
+          : "short vs required";
+    return `${a.label}: balance ${fmt(a.balance)}, planned in ${fmt(a.plannedIn)}, planned out ${fmt(a.plannedOut)}, projected ${fmt(a.projected)}, available ${fmt(available)}, required ${fmt(a.required)} (${enough}).`;
   });
   if (paychecksNearWindow.length > 0) {
     cashPictureLines.push(

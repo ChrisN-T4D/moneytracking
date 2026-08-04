@@ -52,9 +52,10 @@ function requiredForCheckInKey(
   return req.spanishFork;
 }
 
-function checkInEnough(adjusted: number | null, required: number): boolean {
-  if (adjusted === null) return false;
-  return required <= 0 || adjusted >= required;
+/** Enough when balance + planned in covers required — do NOT use projected (already net of out). */
+function checkInEnough(available: number | null, required: number): boolean {
+  if (available === null) return false;
+  return required <= 0 || available >= required;
 }
 
 const ACCOUNT_LABELS: Record<string, string> = {
@@ -747,6 +748,7 @@ export function RecurringTab({
         </h2>
         <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mb-3">
           Enter current balances, then see planned incoming and outgoing until your next paycheck. Projected = balance + in − out.
+          OK = balance + planned in covers Required (same bills as planned out — not compared to projected).
           {nextPaydayYmd ? " Use Adjust on each bill below to change an amount for this paycheck only." : ""}
         </p>
         <div className="overflow-x-auto">
@@ -769,7 +771,10 @@ export function RecurringTab({
                 const entered = checkInBalances[key];
                 const { incoming, outgoing } = plannedCashFlowByAccount[acct];
                 const projected = projectedBalance(entered, incoming, outgoing);
-                const enough = checkInEnough(projected, required);
+                // Cover = balance + in (before bills leave). Comparing projected to required
+                // double-counts planned out when required ≈ outgoing.
+                const available = entered == null ? null : entered + incoming;
+                const enough = checkInEnough(available, required);
                 const editing = checkInEditing === key;
 
                 return (

@@ -2,7 +2,7 @@
 
 Date: 2026-07-20  
 Status: approved for planning  
-App: Neu Money Tracking (`nmt.c.robpneu.com`)
+App: Neu Money Tracking (`nmt.lab.clneu.com`)
 
 ## Goal
 

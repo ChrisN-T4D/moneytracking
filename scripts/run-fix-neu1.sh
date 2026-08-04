@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-export PB_URL="https://pbnmt.c.robpneu.com"
+export PB_URL="https://pbnmt.lab.clneu.com"
 while IFS='=' read -r k v; do
   case "$k" in
     POCKETBASE_ADMIN_EMAIL) export PB_EMAIL="$v" ;;
