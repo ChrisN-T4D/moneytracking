@@ -154,11 +154,11 @@ const boolField = (name, required) => ({ name, type: "bool", required });
 
 const baseRules = {
   type: "base",
-  listRule: null,
-  viewRule: null,
-  createRule: "",
-  updateRule: "",
-  deleteRule: null,
+  listRule: '@request.auth.id != ""',
+  viewRule: '@request.auth.id != ""',
+  createRule: '@request.auth.id != ""',
+  updateRule: '@request.auth.id != ""',
+  deleteRule: '@request.auth.id != ""',
 };
 
 async function createCollection(token, payload) {

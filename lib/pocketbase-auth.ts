@@ -23,26 +23,33 @@ export function hasPbAuth(): boolean {
   return Boolean(POCKETBASE_URL);
 }
 
-/** User session token, or admin token for server-side writes when no session. */
+/**
+ * Token for shared household writes (bills, transfers, etc.).
+ * Prefer PocketBase admin/superuser when configured — collection rules are often
+ * admin-only (deleteRule null). Fall back to the signed-in user cookie.
+ */
 export async function getPbWriteToken(
   base: string
 ): Promise<{ token: string; apiBase: string } | null> {
-  const cookieToken = (await getTokenFromCookie().catch(() => null)) ?? null;
   const apiBase = base.replace(/\/$/, "");
-  if (cookieToken) return { token: cookieToken, apiBase };
-
   const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
   const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
-  if (!email || !password) return null;
-
   const adminBase =
     (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
-  try {
-    const result = await getAdminToken(adminBase, email, password);
-    return { token: result.token, apiBase: result.baseUrl.replace(/\/$/, "") };
-  } catch {
-    return null;
+
+  if (email && password) {
+    try {
+      const result = await getAdminToken(adminBase, email, password);
+      return { token: result.token, apiBase: result.baseUrl.replace(/\/$/, "") };
+    } catch {
+      // fall through to cookie
+    }
   }
+
+  const cookieToken = (await getTokenFromCookie().catch(() => null)) ?? null;
+  if (cookieToken) return { token: cookieToken, apiBase };
+
+  return null;
 }
 
 /** Get the auth token from the request cookie. */

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPbBase, getTokenFromCookie } from "@/lib/pocketbase-auth";
-import { getAdminToken } from "@/lib/pocketbase-setup";
+import { getPbBase, getPbWriteToken } from "@/lib/pocketbase-auth";
 import { oklahomaMortgagePocketBaseNameVariants, pocketBaseBillsFilterByNamesAndSection } from "@/lib/mortgageBillNames";
 
 export const dynamic = "force-dynamic";
@@ -20,21 +19,15 @@ export async function DELETE(request: Request) {
   if (!account) return NextResponse.json({ ok: false, message: "account query param required." }, { status: 400 });
   if (!listType) return NextResponse.json({ ok: false, message: "listType query param required." }, { status: 400 });
 
-  let token: string | null = (await getTokenFromCookie().catch(() => null)) ?? null;
-  let resolvedBase = base.replace(/\/$/, "");
-  if (!token) {
-    const apiBase = (process.env.POCKETBASE_API_URL ?? process.env.NEXT_PUBLIC_POCKETBASE_URL ?? "").trim() || base;
-    try {
-      const r = await getAdminToken(apiBase, process.env.POCKETBASE_ADMIN_EMAIL ?? "", process.env.POCKETBASE_ADMIN_PASSWORD ?? "");
-      token = r.token;
-      resolvedBase = r.baseUrl.replace(/\/$/, "");
-    } catch {
-      return NextResponse.json(
-        { ok: false, message: "Sign in or set PocketBase admin credentials for grouped bill delete." },
-        { status: 401 }
-      );
-    }
+  const auth = await getPbWriteToken(base);
+  if (!auth) {
+    return NextResponse.json(
+      { ok: false, message: "Sign in or set PocketBase admin credentials for grouped bill delete." },
+      { status: 401 }
+    );
   }
+  const token = auth.token;
+  const resolvedBase = auth.apiBase;
 
   const nameVariants = oklahomaMortgagePocketBaseNameVariants(name);
   const filter = encodeURIComponent(pocketBaseBillsFilterByNamesAndSection(nameVariants, account, listType));

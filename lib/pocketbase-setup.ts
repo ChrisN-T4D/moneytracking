@@ -33,11 +33,12 @@ const boolField = (name: string, required: boolean) => ({
 
 const baseRules = {
   type: "base" as const,
-  listRule: null as string | null,
-  viewRule: null as string | null,
-  createRule: "" as string,
-  updateRule: "" as string,
-  deleteRule: null as string | null,
+  // Authenticated app users can read/write shared household data.
+  listRule: '@request.auth.id != ""' as string | null,
+  viewRule: '@request.auth.id != ""' as string | null,
+  createRule: '@request.auth.id != ""' as string,
+  updateRule: '@request.auth.id != ""' as string,
+  deleteRule: '@request.auth.id != ""' as string | null,
 };
 
 export interface SetupOptions {
