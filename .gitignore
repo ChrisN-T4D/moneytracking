@@ -39,3 +39,5 @@ next-env.d.ts
 # local ollama handoff / aider
 .ollama-handoff/
 .aider*
+
+.superpowers/

@@ -134,6 +134,7 @@ function spendOutflowInRange(
   total: number;
   byCategory: Map<string, number>;
   merchants: Map<string, { amount: number; count: number }>;
+  uncategorizedCount: number;
 } {
   const inRange = statements.filter((s) => {
     const ymd = statementDayYmd(s);
@@ -142,6 +143,7 @@ function spendOutflowInRange(
     if (s.amount > 0) return false;
     return true;
   });
+  const uncategorizedCount = inRange.filter((s) => !s.spendCategory?.trim()).length;
   const suggestions = suggestTagsForStatements(inRange, rules);
   const byCategory = new Map<string, number>();
   const merchants = new Map<string, { amount: number; count: number }>();
@@ -150,8 +152,10 @@ function spendOutflowInRange(
   for (const sug of suggestions) {
     const amt = absOutflow(sug.statement.amount);
     total += amt;
-    const label =
-      sug.targetType === "ignore"
+    const spendCategory = sug.statement.spendCategory?.trim();
+    const label = spendCategory
+      ? spendCategory
+      : sug.targetType === "ignore"
         ? "Untagged"
         : sug.targetType === "variable_expense"
           ? "Variable expenses"
@@ -166,7 +170,7 @@ function spendOutflowInRange(
                   : sug.targetType === "auto_transfer"
                     ? "Transfer"
                     : sug.targetName || sug.targetType;
-    if (sug.targetType !== "income" && sug.targetType !== "auto_transfer") {
+    if (spendCategory || (sug.targetType !== "income" && sug.targetType !== "auto_transfer")) {
       byCategory.set(label, (byCategory.get(label) ?? 0) + amt);
     }
     const pattern = makeStatementPattern(sug.statement.description ?? "") || "UNKNOWN";
@@ -174,7 +178,7 @@ function spendOutflowInRange(
     merchants.set(pattern, { amount: prev.amount + amt, count: prev.count + 1 });
   }
 
-  return { total, byCategory, merchants };
+  return { total, byCategory, merchants, uncategorizedCount };
 }
 
 export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<AnalyzeSnapshot> {
@@ -398,6 +402,11 @@ export async function buildAnalyzeSnapshot(now: Date = new Date()): Promise<Anal
 
   const thisSpend = spendOutflowInRange(statements, tagRules, todayYmd, windowEnd);
   const priorSpend = spendOutflowInRange(statements, tagRules, priorStartYmd, priorEndYmd);
+  if (thisSpend.uncategorizedCount > 0) {
+    dataNotes.push(
+      `${thisSpend.uncategorizedCount} outflow statement(s) in this window lack spendCategory — byCategory uses tag rules for those rows.`
+    );
+  }
 
   const topMerchants = [...thisSpend.merchants.entries()]
     .map(([pattern, v]) => ({ pattern, amount: Math.round(v.amount * 100) / 100, count: v.count }))

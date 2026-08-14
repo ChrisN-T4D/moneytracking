@@ -139,6 +139,29 @@ export interface StatementRecord {
   targetType?: StatementTagTargetType | null;
   targetSection?: BillListAccount | "spanish_fork" | null;
   targetName?: string | null;
+  /** LLM/heuristic spend label (distinct from legacy CSV `category`). */
+  spendCategory?: string | null;
+  /** Billing cadence label, e.g. monthly, biweekly, variable. */
+  cadence?: string | null;
+  /** How spendCategory/cadence were assigned: ollama, heuristic, or user. */
+  categorySource?: string | null;
+  /** Model confidence 0–1 when categorySource is ollama/heuristic. */
+  categoryConfidence?: number | null;
+  /** ISO timestamp when category fields were last set. */
+  categorizedAt?: string | null;
+  /** Ollama model id used for categorization, e.g. qwythos:9b. */
+  categoryModel?: string | null;
+}
+
+/** Row appended to statement_category_corrections when user edits category/cadence. */
+export interface StatementCategoryCorrection {
+  statementId: string;
+  pattern: string;
+  fromCategory?: string | null;
+  toCategory: string;
+  fromCadence?: string | null;
+  toCadence: string;
+  createdAt: string;
 }
 
 /** Learned rule for tagging statement rows into sections/types. */

@@ -9,6 +9,7 @@ import type {
   SpanishForkBill,
   Summary,
   StatementRecord,
+  StatementCategoryCorrection,
   StatementTagRule,
   StatementTagTargetType,
   MoneyGoal,
@@ -668,6 +669,12 @@ interface PbStatement {
   targetType?: string | null;
   targetSection?: string | null;
   targetName?: string | null;
+  spendCategory?: string | null;
+  cadence?: string | null;
+  categorySource?: string | null;
+  categoryConfidence?: number | null;
+  categorizedAt?: string | null;
+  categoryModel?: string | null;
 }
 
 function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
@@ -677,6 +684,10 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
       const v = raw[key];
       return v != null && String(v).trim() !== "" ? String(v).trim() : null;
     };
+    const categoryConfidence =
+      raw.categoryConfidence != null && raw.categoryConfidence !== ""
+        ? Number(raw.categoryConfidence)
+        : null;
     return {
       id: item.id,
       date: String(raw.date ?? ""),
@@ -693,8 +704,219 @@ function mapStatementsResponse(items: PbStatement[]): StatementRecord[] {
       targetType: str("targetType") as StatementRecord["targetType"],
       targetSection: str("targetSection") as StatementRecord["targetSection"],
       targetName: str("targetName"),
+      spendCategory: str("spendCategory"),
+      cadence: str("cadence"),
+      categorySource: str("categorySource"),
+      categoryConfidence:
+        categoryConfidence != null && Number.isFinite(categoryConfidence)
+          ? categoryConfidence
+          : null,
+      categorizedAt: str("categorizedAt"),
+      categoryModel: str("categoryModel"),
     };
   });
+}
+
+export type StatementCategoryUpdateFields = Pick<
+  StatementRecord,
+  | "spendCategory"
+  | "cadence"
+  | "categorySource"
+  | "categoryConfidence"
+  | "categorizedAt"
+  | "categoryModel"
+>;
+
+async function getStatementAdminAuth(): Promise<{
+  token: string;
+  baseUrl: string;
+} | null> {
+  const apiBase = POCKETBASE_API_URL || BASE;
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  if (!apiBase || !email || !password) return null;
+  try {
+    return await getAdminToken(apiBase, email, password);
+  } catch {
+    return null;
+  }
+}
+
+export async function verifyStatementCategoryAdminAuth(): Promise<
+  | { ok: true }
+  | { ok: false; message: string; status: number }
+> {
+  if (!POCKETBASE_URL) {
+    return {
+      ok: false,
+      status: 400,
+      message: "NEXT_PUBLIC_POCKETBASE_URL is not set; cannot persist statement categories.",
+    };
+  }
+
+  const email = process.env.POCKETBASE_ADMIN_EMAIL ?? "";
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD ?? "";
+  if (!email || !password) {
+    return {
+      ok: false,
+      status: 500,
+      message:
+        "PocketBase admin credentials are required to categorize statements. Set POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD so category fields can be persisted.",
+    };
+  }
+
+  const auth = await getStatementAdminAuth();
+  if (!auth) {
+    return {
+      ok: false,
+      status: 502,
+      message:
+        "PocketBase admin authentication failed; verify POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD, and POCKETBASE_API_URL.",
+    };
+  }
+
+  return { ok: true };
+}
+
+/** PATCH statement category fields (admin auth when configured). */
+export async function updateStatementCategory(
+  id: string,
+  fields: Partial<StatementCategoryUpdateFields>
+): Promise<boolean> {
+  if (!POCKETBASE_URL) return false;
+  const auth = await getStatementAdminAuth();
+  if (!auth) return false;
+
+  const body: Record<string, unknown> = {};
+  if ("spendCategory" in fields) body.spendCategory = fields.spendCategory ?? "";
+  if ("cadence" in fields) body.cadence = fields.cadence ?? "";
+  if ("categorySource" in fields) body.categorySource = fields.categorySource ?? "";
+  if ("categoryConfidence" in fields) {
+    body.categoryConfidence =
+      fields.categoryConfidence != null ? Number(fields.categoryConfidence) : null;
+  }
+  if ("categorizedAt" in fields) body.categorizedAt = fields.categorizedAt ?? "";
+  if ("categoryModel" in fields) body.categoryModel = fields.categoryModel ?? "";
+
+  const url = `${auth.baseUrl.replace(/\/$/, "")}/api/collections/statements/records/${id}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${auth.token}`,
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  return res.ok;
+}
+
+interface PbCategoryCorrection {
+  id: string;
+  statementId?: string;
+  pattern?: string;
+  fromCategory?: string | null;
+  toCategory?: string;
+  fromCadence?: string | null;
+  toCadence?: string;
+  createdAt?: string;
+}
+
+function mapCategoryCorrections(items: PbCategoryCorrection[]): StatementCategoryCorrection[] {
+  return (items ?? []).map((item) => ({
+    statementId: String(item.statementId ?? ""),
+    pattern: String(item.pattern ?? ""),
+    fromCategory: item.fromCategory ?? null,
+    toCategory: String(item.toCategory ?? ""),
+    fromCadence: item.fromCadence ?? null,
+    toCadence: String(item.toCadence ?? ""),
+    createdAt: String(item.createdAt ?? ""),
+  }));
+}
+
+const CATEGORY_CORRECTIONS_PER_PAGE = 500;
+
+async function fetchCategoryCorrectionPages(
+  baseUrl: string,
+  headers?: Record<string, string>
+): Promise<StatementCategoryCorrection[] | null> {
+  const base = baseUrl.replace(/\/$/, "");
+  const allItems: PbCategoryCorrection[] = [];
+
+  for (let page = 1; ; page++) {
+    const params = new URLSearchParams({
+      page: String(page),
+      perPage: String(CATEGORY_CORRECTIONS_PER_PAGE),
+      sort: "-createdAt",
+    });
+    const res = await fetch(
+      `${base}/api/collections/statement_category_corrections/records?${params}`,
+      {
+        cache: "no-store",
+        ...(headers ? { headers } : {}),
+      }
+    );
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as PbListResponse<PbCategoryCorrection>;
+    const items = data.items ?? [];
+    allItems.push(...items);
+
+    const totalItems = Number(data.totalItems);
+    const perPage = Number(data.perPage) || CATEGORY_CORRECTIONS_PER_PAGE;
+    const currentPage = Number(data.page) || page;
+    if (items.length === 0 || (Number.isFinite(totalItems) && currentPage * perPage >= totalItems)) {
+      break;
+    }
+  }
+
+  return mapCategoryCorrections(allItems);
+}
+
+/** Fetch category corrections (admin auth when configured). */
+export async function getCategoryCorrections(): Promise<StatementCategoryCorrection[]> {
+  if (!POCKETBASE_URL) return [];
+  try {
+    const auth = await getStatementAdminAuth();
+    if (auth) {
+      const corrections = await fetchCategoryCorrectionPages(auth.baseUrl, {
+        Authorization: `Bearer ${auth.token}`,
+      });
+      if (corrections) return corrections;
+    }
+    return (await fetchCategoryCorrectionPages(BASE)) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Append a user category/cadence correction (admin auth when configured). */
+export async function createCategoryCorrection(
+  row: StatementCategoryCorrection
+): Promise<boolean> {
+  if (!POCKETBASE_URL) return false;
+  const auth = await getStatementAdminAuth();
+  if (!auth) return false;
+
+  const url = `${auth.baseUrl.replace(/\/$/, "")}/api/collections/statement_category_corrections/records`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${auth.token}`,
+    },
+    body: JSON.stringify({
+      statementId: row.statementId,
+      pattern: row.pattern,
+      fromCategory: row.fromCategory ?? "",
+      toCategory: row.toCategory,
+      fromCadence: row.fromCadence ?? "",
+      toCadence: row.toCadence,
+      createdAt: row.createdAt,
+    }),
+    cache: "no-store",
+  });
+  return res.ok;
 }
 
 /** Fetch statement records from PocketBase. Uses no-store so "Paid this month" and other statement-derived data stay fresh after refresh.

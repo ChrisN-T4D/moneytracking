@@ -189,7 +189,7 @@ export function AddItemsToBillsModal({ open: controlledOpen, onClose }: AddItems
       setAutoTransfers(autoTransfersData);
       if (items.length === 0) {
         setTagStatus("success");
-        setTagMessage(data.message ?? "No statement rows found. Import statements first on the Statements page.");
+        setTagMessage(data.message ?? "No statement rows found. Import statements first on Analytics.");
         setTagSuggestions([]);
         return;
       }

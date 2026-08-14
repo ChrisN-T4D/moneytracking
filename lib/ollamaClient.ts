@@ -2,6 +2,8 @@
  * Minimal Ollama HTTP client for Analyze brief/chat (neu2).
  */
 
+import { SPEND_CATEGORIES } from "@/lib/spendTaxonomy";
+
 export function getOllamaConfig(): { baseUrl: string; model: string } {
   const baseUrl = (process.env.OLLAMA_BASE_URL?.trim() || "http://192.168.50.112:11434").replace(
     /\/$/,
@@ -74,6 +76,15 @@ Rules:
 - Spend reality: compare spend.thisCycleOutflow vs spend.priorCycleOutflow; mention topMerchants/byCategory if present. Planned bill outflows are NOT the same as recorded statement spend — say so if spend is $0 but bills are due.
 - Cut list: 3–5 concrete cuts. ONLY use cutCandidates (optional items). NEVER suggest cutting mustPayUpcoming or anything with isEssential=true (life insurance, tithing, utilities, etc.). Prefer dueInWindow cutCandidates and monthly subs; for yearly quote monthlyEquivalent.
 - Keep each section to 2–5 short sentences or bullets. No preamble.`;
+
+export const CATEGORIZE_SYSTEM = `You are a spend categorizer for Neu Money Tracking.
+You receive a JSON array of bank statement patterns. Respond with ONLY a JSON array — no markdown fences, no prose, no explanation.
+Each output element must be: { "id": string, "spendCategory": string, "cadence": string, "confidence": number }
+spendCategory must be exactly one of: ${SPEND_CATEGORIES.join(", ")}
+cadence must be exactly one of: monthly, biweekly, variable, income, transfer
+confidence is a number from 0 to 1 indicating how sure you are.
+Do not invent or recompute dollar amounts — only label categories and cadence.
+Return one object per input id.`;
 
 export const ANALYZE_CHAT_SYSTEM = `You are a household cash-flow analyst for Neu Money Tracking.
 Answer using ONLY the provided paycheck snapshot JSON (and optional prior brief).

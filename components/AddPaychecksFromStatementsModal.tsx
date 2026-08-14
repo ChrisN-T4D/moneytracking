@@ -53,7 +53,7 @@ export function AddPaychecksFromStatementsModal({ open: controlledOpen, onClose 
       setFillStatus("success");
       const n = data.statementsCount ?? 0;
       setFillMessage(pcs.length === 0
-        ? `No paychecks found in ${n} statements. Import statements on the Statements page first.`
+        ? `No paychecks found in ${n} statements. Import statements on Analytics first.`
         : `Found ${pcs.length} paychecks from ${n} statements. Select which to add.`);
     } catch (err) {
       setFillStatus("error");
