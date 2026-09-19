@@ -62,7 +62,9 @@ Use upstream `budget-tracker/self-hosting/docker-compose.yml`:
 - Join existing `traefik_proxy` network (same pattern as current NMT container)
 - Env: `BETTER_AUTH_URL` and `AUTH_ORIGIN` = `https://nmt.lab.clneu.com`
 - `MCP_BASE_URL=https://nmt.lab.clneu.com` for external MCP clients
-- `SYSTEM_MAX_SIGNUPS_ALLOWED=1` (single household)
+- `SYSTEM_MAX_SIGNUPS_ALLOWED=2` (Chris + spouse)
+- `ADMIN_USERS=chris` (instance admin API)
+- Traefik redirect `/` → `/sign-in` (skip public marketing landing on self-host)
 
 ### Secrets
 

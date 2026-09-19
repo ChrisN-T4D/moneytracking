@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Hostname: `https://nmt.lab.clneu.com` (full cutover, no parallel hostname)
-- Single signup: `SYSTEM_MAX_SIGNUPS_ALLOWED=1`
+- Household signups: `SYSTEM_MAX_SIGNUPS_ALLOWED=2`, `ADMIN_USERS=chris`
+- Root URL → `/sign-in` via Traefik redirect (not Astro landing)
 - Pause moneyvault Hermes `simplefin-sync` cron (MM owns SimpleFIN)
 - Do not fork MoneyMatter (AGPL); external compose override + skills only
 - Volumes on `/neuphotos` (root disk ~93% full)
